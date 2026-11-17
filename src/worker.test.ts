@@ -55,3 +55,19 @@ test('keeps unpaired endings visible without mixing terminals or retaining paylo
   assert.equal(JSON.stringify(result).includes('secret'), false)
   await worker.deactivate()
 })
+
+
+test('classifies observed terminal resources without retaining inputs or mixing workspaces', async () => {
+  const context = { branch: '', displayName: '', terminals: [{ id: 't1' }] }
+  const host = mockHost({ results: { 'workspace.readContext': context } })
+  const worker = await mountWorker(main, { host })
+  const base = { agent: 'codex', workspaceId: null, terminalId: 't1', input: { cmd: 'cat /tmp/skills/ui-ux-pro-max/SKILL.md confidential' }, tool: 'shell' }
+  await worker.hooks.fire('agent.tool.before', base)
+  await worker.hooks.fire('agent.tool.before', { ...base, terminalId: 'other', tool: 'mcp__secret_server__run' })
+  const result = await worker.request('calls.get')
+  assert.deepEqual(result.resources, [{ category: 'skill', name: 'ui-ux-pro-max', evidence: 'inferred' }])
+  assert.equal(JSON.stringify(result).includes('confidential'), false)
+  host.respond('workspace.readContext', { ...context, terminals: [{ id: 'other' }] })
+  assert.deepEqual((await worker.request('calls.get')).resources, [{ category: 'mcp', name: 'secret_server', evidence: 'observed' }])
+  await worker.deactivate()
+})

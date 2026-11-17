@@ -4,7 +4,7 @@ import { createNativeReader, resolveOrcaCli } from './native-reader'
 test('native reader never fetches without explicit opt-in', async () => {
   let count = 0
   const read = createNativeReader(async () => false, async () => 'identity:one', async () => { count++; return {} })
-  assert.deepEqual(await read(), { status: 'disabled', activities: [] })
+  assert.deepEqual(await read(), { status: 'disabled', activities: [], resources: [] })
   assert.equal(count, 0)
 })
 
@@ -22,7 +22,7 @@ test('native reader shares concurrent reads, filters workspace and discards on o
   release({ result: { worktrees: [{ address: { worktree: 'identity:one' }, agents: [{ agentType: 'codex', state: 'working', toolName: 'Read', prompt: 'private' }] }] } })
   const results = await Promise.all([a, b])
   assert.equal(fetches, 1)
-  assert.deepEqual(results[0], { status: 'ready', activities: [{ agentType: 'codex', state: 'working', toolName: 'Read' }] })
+  assert.deepEqual(results[0], { status: 'ready', activities: [{ agentType: 'codex', state: 'working', toolName: 'Read' }], resources: [] })
   assert.equal(JSON.stringify(results).includes('private'), false)
   const c = read()
   await Promise.resolve()
@@ -30,12 +30,12 @@ test('native reader shares concurrent reads, filters workspace and discards on o
   await Promise.resolve()
   enabled = false
   release({ result: { worktrees: [] } })
-  assert.deepEqual(await c, { status: 'disabled', activities: [] })
+  assert.deepEqual(await c, { status: 'disabled', activities: [], resources: [] })
 })
 
 test('native reader reports failure without leaking raw errors', async () => {
   const read = createNativeReader(async () => true, async () => 'identity:one', async () => { throw new Error('private prompt') })
-  assert.deepEqual(await read(), { status: 'unavailable', activities: [] })
+  assert.deepEqual(await read(), { status: 'unavailable', activities: [], resources: [] })
 })
 
 
@@ -58,5 +58,72 @@ test('native reader drops a snapshot if the workspace changes during a read', as
   await Promise.resolve()
   workspace = 'identity:two'
   release({ result: { worktrees: [{ address: { worktree: 'identity:one' }, agents: [{ agentType: 'codex', state: 'working', toolName: 'private' }] }] } })
-  assert.deepEqual(await pending, { status: 'disabled', activities: [] })
+  assert.deepEqual(await pending, { status: 'disabled', activities: [], resources: [] })
+})
+
+
+test('retains only classified resource labels in the active workspace and clears on opt-out or workspace change', async () => {
+  let enabled = true
+  let workspace = 'identity:one'
+  let toolInput = 'cat /home/me/.agents/skills/ui-ux-pro-max/SKILL.md private content'
+  const read = createNativeReader(async () => enabled, async () => workspace, async () => ({ result: { worktrees: [
+    { address: { worktree: 'identity:one' }, agents: [{ state: 'working', toolName: 'shell', toolInput, prompt: 'secret prompt' }] },
+    { address: { worktree: 'identity:two' }, agents: [{ state: 'working', toolName: 'mcp__other__query', toolInput: 'secret' }] }
+  ] } }))
+  let result = await read()
+  assert.deepEqual(result.resources, [{ category: 'skill', name: 'ui-ux-pro-max', evidence: 'inferred' }])
+  assert.equal(JSON.stringify(result).includes('private'), false)
+  toolInput = ''
+  result = await read()
+  assert.equal(result.resources.length, 1)
+  workspace = 'identity:two'
+  result = await read()
+  assert.deepEqual(result.resources, [{ category: 'mcp', name: 'other', evidence: 'observed' }])
+  enabled = false
+  assert.deepEqual((await read()).resources, [])
+  enabled = true
+  workspace = 'identity:one'
+  assert.deepEqual((await read()).resources, [])
+})
+
+test('explicit reset discards in-flight data and retained labels', async () => {
+  let release!: (snapshot: unknown) => void
+  const read = createNativeReader(async () => true, async () => 'identity:one', () => new Promise((resolve) => { release = resolve }))
+  const pending = read()
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  read.clear()
+  release({ result: { worktrees: [{ address: { worktree: 'identity:one' }, agents: [{ state: 'working', toolName: 'mcp__test__do' }] }] } })
+  assert.deepEqual(await pending, { status: 'disabled', activities: [], resources: [] })
+})
+
+test('merges bounded journal resources only when opted in and only for matching local sessions', async () => {
+  const id = 'codex_12345678_abcd_1234_abcd_123456789abc'
+  let enabled = false
+  let queries = 0
+  const snapshot = { result: { worktrees: [{ hostId: 'local', address: { worktree: 'identity:one' }, agents: [{ structuredHostOwned: true, paneKey: `structured-agent-session-${id}:pane`, state: 'working', toolName: 'shell' }] }] } }
+  const read = createNativeReader(async () => enabled, async () => 'identity:one', async () => snapshot, async (sid) => {
+    queries++
+    assert.equal(sid, id)
+    return { status: 'truncated', resources: [{ category: 'skill', name: 'ui-ux-pro-max', evidence: 'inferred' }] }
+  })
+  assert.equal((await read()).status, 'disabled')
+  assert.equal(queries, 0)
+  enabled = true
+  const result = await read()
+  assert.equal(queries, 1)
+  assert.equal(result.journalStatus, 'truncated')
+  assert.equal(result.resources[0].name, 'ui-ux-pro-max')
+})
+
+test('discards journal results if workspace changes while reading', async () => {
+  const id = 'codex_12345678_abcd_1234_abcd_123456789abc'
+  let workspace = 'identity:one'
+  const snapshot = { result: { worktrees: [{ hostId: 'local', address: { worktree: 'identity:one' }, agents: [{ structuredHostOwned: true, paneKey: `structured-agent-session-${id}:pane` }] }] } }
+  const read = createNativeReader(async () => true, async () => workspace, async () => snapshot, async () => {
+    workspace = 'identity:other'
+    return { status: 'ready', resources: [{ category: 'skill', name: 'private', evidence: 'inferred' }] }
+  })
+  assert.deepEqual(await read(), { status: 'disabled', activities: [], resources: [] })
 })

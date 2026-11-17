@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process'
-import { parseNativeActivity, type NativeActivity } from './native-activity'
+import { parseNativeActivity, parseNativeResources, nativeSessionIds, type NativeActivity } from './native-activity'
+import type { ResourceObservation } from './resource-classifier'
+import { readJournalActivity, type JournalResult } from './journal-activity'
 
-export type NativeResult = { status: 'disabled' | 'ready' | 'unavailable'; activities: NativeActivity[] }
+export type NativeResult = { status: 'disabled' | 'ready' | 'unavailable'; activities: NativeActivity[]; resources: ResourceObservation[]; journalStatus?: JournalResult['status'] }
 type FetchSnapshot = () => Promise<unknown>
 type GetEnabled = () => Promise<boolean>
 type GetWorkspace = () => Promise<string | null>
@@ -36,20 +38,47 @@ export function fetchSnapshot(): Promise<unknown> {
 }
 
 /** Requests are deduplicated and never issued until the setting is explicitly true. */
-export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace, fetch: FetchSnapshot) {
+export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace, fetch: FetchSnapshot, journal: (sessionId: string) => Promise<JournalResult> = readJournalActivity) {
   let inFlight: Promise<NativeResult> | null = null
-  return async (): Promise<NativeResult> => {
+  let workspaceId: string | null = null
+  let epoch = 0
+  const observed = new Map<string, ResourceObservation>()
+  const clear = () => { epoch++; workspaceId = null; observed.clear() }
+  const empty = (status: 'disabled' | 'unavailable'): NativeResult => ({ status, activities: [], resources: [] })
+  const read = async (): Promise<NativeResult> => {
     if (inFlight) return inFlight
     inFlight = (async (): Promise<NativeResult> => {
       try {
-        if (!(await enabled())) return { status: 'disabled', activities: [] }
+        if (!(await enabled())) { clear(); return empty('disabled') }
         const id = await workspace()
-        if (!id) return { status: 'unavailable', activities: [] }
+        if (!id) { clear(); return empty('unavailable') }
+        if (workspaceId !== id) { clear(); workspaceId = id }
+        const requestEpoch = epoch
         const snapshot = await fetch()
-        if (!(await enabled()) || (await workspace()) !== id) return { status: 'disabled', activities: [] }
-        return { status: 'ready', activities: parseNativeActivity(snapshot, id) }
-      } catch { return { status: 'unavailable', activities: [] } }
+        if (epoch !== requestEpoch || !(await enabled()) || (await workspace()) !== id) {
+          clear()
+          return empty('disabled')
+        }
+        const sessions = nativeSessionIds(snapshot, id)
+        const journals = await Promise.all(sessions.ids.map((sessionId) => journal(sessionId)))
+        if (epoch !== requestEpoch || !(await enabled()) || (await workspace()) !== id) {
+          clear()
+          return empty('disabled')
+        }
+        const journalStatus: JournalResult['status'] | undefined = sessions.ids.length === 0 ? undefined
+          : journals.some((x) => x.status === 'unavailable') ? 'unavailable'
+          : sessions.truncated || journals.some((x) => x.status === 'truncated') ? 'truncated' : 'ready'
+        for (const resource of [...parseNativeResources(snapshot, id), ...journals.flatMap((x) => x.resources)]) {
+          const key = `${resource.category}:${resource.name}`
+          const previous = observed.get(key)
+          if (!previous || resource.evidence === 'observed') observed.set(key, resource)
+        }
+        while (observed.size > 100) observed.delete(observed.keys().next().value!)
+        return { status: 'ready', activities: parseNativeActivity(snapshot, id), resources: [...observed.values()], ...(journalStatus ? { journalStatus } : {}) }
+      } catch { return empty('unavailable') }
     })()
     try { return await inFlight } finally { inFlight = null }
   }
+  read.clear = clear
+  return read
 }

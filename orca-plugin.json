@@ -2,8 +2,8 @@
   "manifestVersion": 2,
   "id": "traffic-light",
   "name": "Traffic Light",
-  "version": "0.2.0",
-  "description": "Show observed agent tool calls and optional Orca chat activity.",
+  "version": "0.3.0",
+  "description": "Show observed skill, plugin, MCP and agent activity.",
   "license": "MIT-0",
   "engines": {
     "orca": ">=1.4.248"
@@ -41,7 +41,7 @@
       {
         "key": "nativeActivity",
         "title": "Observe current native chat activity",
-        "description": "When enabled, runs Orca CLI to read workspace status, which includes prompts, tool inputs and assistant messages from all workspaces. Only agent status and tool names for the current workspace are displayed; short calls can be missed.",
+        "description": "When enabled, reads Orca workspace status for all workspaces, including prompts and tool inputs, and on macOS reads recent tool inputs from current-workspace chat history. Displays detected names only.",
         "type": "boolean",
         "default": false
       }
