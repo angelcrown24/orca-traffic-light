@@ -4,6 +4,7 @@ import * as panel from './panel'
 test('shows observed calls and does not label finished as successful', async () => {
   const host = mockHost({ requests: { 'calls.get': () => ({ workspace: true, calls: [{ id: '1', tool: 'Read', agent: 'claude', state: 'finished' }] }) } })
   const view = await mount(panel, { host })
+  await view.toggle({ label: 'Recent tool calls · 1' })
   assert.equal(Boolean(view.find({ text: 'Read' })), true)
   assert.equal(Boolean(view.find({ text: 'Finished' })), true)
   assert.deepEqual(view.errors, [])
@@ -17,6 +18,7 @@ test('clears stale calls on refresh failure and recovers on retry', async () => 
     return { workspace: true, calls: [{ id: '1', tool: 'Read', agent: 'claude', state: 'finished' }] }
   } } })
   const view = await mount(panel, { host })
+  await view.toggle({ label: 'Recent tool calls · 1' })
   assert.equal(Boolean(view.find({ text: 'Read' })), true)
   failing = true
   await view.post('calls.changed', {})
@@ -39,12 +41,13 @@ test('native activity is off by default and only requested after explicit opt-in
   const view = await mount(panel, { host })
   try {
   assert.equal(requests, 0)
-  assert.equal(Boolean(view.find({ text: 'Optional: Orca CLI returns prompts, tool inputs and assistant messages from all workspaces to this plugin. On macOS, recent tool inputs for current-workspace chats are also read from Orca’s local journal. Only agent states, tool names and detected resource names are displayed; inputs and conversation data are not saved, logged or sent by this plugin.' })), true)
-  await view.toggle({ label: 'Show current native chat activity' })
+  await view.toggle({ label: 'Settings & privacy' })
+  assert.equal(Boolean(view.find({ text: 'When on, workspace status can include prompts, tool inputs and replies from all workspaces. On macOS, recent tool inputs in this workspace are also read.' })), true)
+  await view.toggle({ label: 'Show chat activity' })
   assert.equal(requests > 0, true)
-  assert.equal(Boolean(view.find({ text: 'codex: Read' })), true)
-  await view.toggle({ label: 'Show current native chat activity' })
-  assert.equal(view.find({ text: 'codex: Read' }), null)
+  assert.equal(Boolean(view.find({ text: 'codex · Read' })), true)
+  await view.toggle({ label: 'Show chat activity' })
+  assert.equal(view.find({ text: 'codex · Read' }), null)
   } finally { await view.unmount() }
 })
 
@@ -79,8 +82,8 @@ test('shows observed resource names and marks inferred references accurately', a
   try {
     assert.equal(Boolean(view.find({ text: 'ui-ux-pro-max' })), true)
     assert.equal(Boolean(view.find({ text: 'figma-local' })), true)
-    assert.equal(Boolean(view.find({ text: 'Inferred' })), true)
-    assert.equal(Boolean(view.find({ text: 'Observed' })), true)
+    assert.equal(Boolean(view.find({ text: 'Referenced' })), true)
+    assert.equal(Boolean(view.find({ text: 'Direct' })), true)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })
@@ -94,8 +97,25 @@ test('merges native and terminal resources without falsely upgrading evidence', 
   try {
     assert.equal(Boolean(view.find({ text: 'ux' })), true)
     assert.equal(Boolean(view.find({ text: 'example' })), true)
-    assert.equal(Boolean(view.find({ text: 'Inferred' })), true)
-    assert.equal(Boolean(view.find({ text: 'Observed' })), true)
+    assert.equal(Boolean(view.find({ text: 'Referenced' })), true)
+    assert.equal(Boolean(view.find({ text: 'Direct' })), true)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+
+test('shows Korean labels and privacy disclosure beside the switch', async () => {
+  const host = mockHost({ settings: { nativeActivity: false }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [], resources: [{ category: 'skill', name: 'ui-ux-pro-max', evidence: 'inferred' }] })
+  } })
+  const view = await mount(panel, { host, locale: 'ko-KR' })
+  try {
+    assert.equal(Boolean(view.find({ text: '감지된 항목' })), true)
+    assert.equal(Boolean(view.find({ text: '스킬' })), true)
+    assert.equal(Boolean(view.find({ text: '참조 추정' })), true)
+    await view.toggle({ label: '설정 및 개인정보' })
+    assert.equal(Boolean(view.find({ label: '채팅 활동 표시' })), true)
+    assert.equal(Boolean(view.find({ text: '켜면 모든 작업공간의 상태에 포함된 프롬프트·도구 입력·응답을 읽습니다. macOS에서는 현재 작업공간의 최근 도구 입력도 읽습니다.' })), true)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })

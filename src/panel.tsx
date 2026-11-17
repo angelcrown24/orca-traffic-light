@@ -1,4 +1,4 @@
-import { atom, Badge, Box, Button, Heading, on, plugin, read, Row, set, settings, Stack, Switch, Text, type PanelContext } from 'orca'
+import { atom, Badge, Box, Button, Collapsible, env, Heading, on, plugin, read, Row, Separator, set, settings, Stack, Switch, Text, type PanelContext } from 'orca'
 import type { Call } from './protocol'
 import type { NativeActivity } from './native-activity'
 import type { ResourceObservation } from './resource-classifier'
@@ -78,35 +78,123 @@ export function setup(ctx: PanelContext): void {
   void readNativeSetting().then(() => { if (read(nativeEnabled)) void refreshNative() })
   void refresh()
 }
+const labels = {
+  en: {
+    summary: 'Activity in this workspace', chatOn: 'Chat monitoring on', chatOff: 'Chat monitoring off', chatError: 'Chat activity unavailable',
+    detected: 'Detected items', detectedHelp: 'Names found in activity; a reference does not prove execution.',
+    skill: 'Skills', plugin: 'Plugins', mcp: 'MCP servers', none: 'No items detected yet',
+    empty: 'An empty list does not mean an item was unused.', direct: 'Direct', inferred: 'Referenced',
+    agent: 'Agent activity', agentNone: 'No agent activity reported.', agentOff: 'Turn on chat activity in settings to see agent status.', unavailable: 'Could not load chat activity.',
+    truncated: 'Only recent chat history is shown.', historyUnavailable: 'Recent chat history is unavailable.',
+    toolCalls: 'Recent tool calls', toolHelp: 'Local terminal calls observed since the plugin started.',
+    toolNone: 'No terminal calls observed yet.', noWorkspace: 'Open a workspace to see activity.',
+    loading: 'Loading activity…', failed: 'Could not load tool calls.', retry: 'Retry',
+    settings: 'Settings & privacy', setting: 'Show chat activity',
+    privacy: 'When on, workspace status can include prompts, tool inputs and replies from all workspaces. On macOS, recent tool inputs in this workspace are also read.',
+    privacyMore: 'How activity is read',
+    privacyDetail: 'Only agent status, tool and detected names are displayed. Inputs and conversation data are not saved, logged or sent by this plugin. Reads run while this panel is visible. Activity may be incomplete and short calls can be missed.',
+    toolDetail: 'Finished means the call ended, not that it succeeded. Calls without IDs are matched by inference; ambiguous calls are uncertain. Calls without a terminal ID are omitted.',
+    working: 'Working', blocked: 'Blocked', waiting: 'Waiting', done: 'Done',
+    running: 'Awaiting finish', finished: 'Finished', uncertain: 'Uncertain'
+  },
+  ko: {
+    summary: '현재 작업공간 활동', chatOn: '채팅 활동 켜짐', chatOff: '채팅 활동 꺼짐', chatError: '채팅 활동 오류',
+    detected: '감지된 항목', detectedHelp: '활동에서 발견한 이름입니다. 참조가 실제 실행을 뜻하지는 않습니다.',
+    skill: '스킬', plugin: '플러그인', mcp: 'MCP 서버', none: '감지된 항목 없음',
+    empty: '목록에 없어도 설치했거나 사용했을 수 있습니다.', direct: '직접 감지', inferred: '참조 추정',
+    agent: '에이전트 활동', agentNone: '보고된 에이전트 활동이 없습니다.', agentOff: '설정에서 채팅 활동을 켜면 상태를 볼 수 있습니다.', unavailable: '채팅 활동을 불러오지 못했습니다.',
+    truncated: '최근 채팅 기록 일부만 표시합니다.', historyUnavailable: '최근 채팅 기록을 불러올 수 없습니다.',
+    toolCalls: '최근 도구 호출', toolHelp: '플러그인 실행 중 관측한 로컬 터미널 호출입니다.',
+    toolNone: '관측된 터미널 호출이 없습니다.', noWorkspace: '작업공간을 열어 활동을 확인하세요.',
+    loading: '활동을 불러오는 중…', failed: '도구 호출을 불러오지 못했습니다.', retry: '다시 시도',
+    settings: '설정 및 개인정보', setting: '채팅 활동 표시',
+    privacy: '켜면 모든 작업공간의 상태에 포함된 프롬프트·도구 입력·응답을 읽습니다. macOS에서는 현재 작업공간의 최근 도구 입력도 읽습니다.',
+    privacyMore: '어떤 정보를 읽나요?',
+    privacyDetail: '화면에는 에이전트 상태, 도구 및 감지된 이름만 표시합니다. 입력과 대화 내용은 이 플러그인이 저장·기록·전송하지 않습니다. 패널이 보이는 동안 조회하며 짧은 활동은 놓칠 수 있습니다.',
+    toolDetail: '완료는 호출 종료를 뜻하며 성공 여부는 알 수 없습니다. 호출 ID가 없으면 추정해 연결하고, 모호한 경우 불확실로 표시합니다. 터미널 ID가 없는 호출은 제외합니다.',
+    working: '작업 중', blocked: '차단됨', waiting: '대기 중', done: '완료',
+    running: '종료 대기', finished: '종료됨', uncertain: '불확실'
+  }
+} as const
+
 export default function Panel() {
+  const t = env.locale.toLowerCase().startsWith('ko') ? labels.ko : labels.en
   const items = read(calls)
   const resources = new Map<string, ResourceObservation>()
   for (const item of [...read(terminalResources), ...read(nativeResources)]) {
     const key = `${item.category}:${item.name}`
     if (!resources.has(key) || item.evidence === 'observed') resources.set(key, item)
   }
-  return <Stack gap="md">
-    <Heading>Traffic Light</Heading>
-    <Heading level={2}>Skills, plugins and MCP</Heading>
-    <Text muted size="xs">Captured activity only. Inferred means a reference was found, not proof of execution. Some agents and short calls may not be captured; an absent item may still be installed or used.</Text>
-    {resources.size === 0 ? <Text>No skill, plugin or MCP activity detected yet. Native chats require the optional activity setting below.</Text> : Array.from(resources.values(), (resource) => <Row key={`${resource.category}:${resource.name}`} justify="between" gap="sm" wrap>
-      <Box direction="column" gap="xs" minWidth={0} grow><Text truncate>{resource.name}</Text><Text muted size="xs">{resource.category === 'mcp' ? 'MCP server' : resource.category === 'skill' ? 'Skill' : 'Plugin'}</Text></Box>
-      <Badge tone={resource.evidence === 'observed' ? 'success' : 'neutral'}>{resource.evidence === 'observed' ? 'Observed' : 'Inferred'}</Badge>
-    </Row>)}
-    <Text muted size="xs">Local terminal agent tool calls observed since this plugin started.</Text>
-    {read(loading) ? <Text>Loading…</Text> : read(failed) ? <Stack gap="sm"><Text tone="danger">Could not load tool calls.</Text><Button onPress={refresh}>Retry</Button></Stack> : !read(workspace) ? <Text>Open a workspace to see its calls.</Text> : items.length === 0 ? <Text>No calls observed in this workspace yet.</Text> :
-      items.map((call) => <Row key={call.id} justify="between" gap="sm">
-        <Stack gap="xs"><Text>{call.tool}</Text><Text muted size="xs">{call.agent}</Text></Stack>
-        <Badge tone={call.state === 'running' ? 'warning' : call.state === 'finished' ? 'success' : 'neutral'}>{call.state === 'running' ? 'Awaiting finish' : call.state === 'finished' ? 'Finished' : 'Uncertain'}</Badge>
-      </Row>)}
-    <Heading level={2}>Native chat activity</Heading>
-    <Text size="xs">Optional: Orca CLI returns prompts, tool inputs and assistant messages from all workspaces to this plugin. On macOS, recent tool inputs for current-workspace chats are also read from Orca’s local journal. Only agent states, tool names and detected resource names are displayed; inputs and conversation data are not saved, logged or sent by this plugin.</Text>
-    <Switch label="Show current native chat activity" checked={read(nativeEnabled)} onChange={changeNative} />
-    {read(nativeEnabled) ? <Stack gap="sm">
-      <Text muted size="xs">Activity and recent history may be incomplete. Availability varies by agent and platform; model choice is not restricted.</Text>
-      {read(journalStatus) === 'truncated' ? <Text>History is limited to recent calls and sessions.</Text> : read(journalStatus) === 'unavailable' ? <Text>Recent chat history is unavailable; live activity may still appear.</Text> : null}
-      {read(nativeStatus) === 'unavailable' ? <Text tone="danger">Native activity unavailable. Check the Orca CLI and try again.</Text> : read(nativeActivities).length === 0 ? <Text>No native activity reported for this workspace.</Text> : read(nativeActivities).map((activity, i) => <Row key={String(i)} justify="between" gap="sm"><Text>{(activity.agentType ?? 'Agent') + (activity.toolName ? ': ' + activity.toolName : '')}</Text><Badge>{activity.state}</Badge></Row>)}
-    </Stack> : null}
-    <Text muted size="xs">Finished means the call ended; success is not known. When a call ID is missing, matching is inferred only if one call fits; ambiguous calls are uncertain. Events without a terminal ID are omitted.</Text>
-  </Stack>
+  const grouped = [
+    { category: 'skill', title: t.skill },
+    { category: 'mcp', title: t.mcp },
+    { category: 'plugin', title: t.plugin }
+  ] as const
+  const stateNames = { working: t.working, blocked: t.blocked, waiting: t.waiting, done: t.done }
+  const callNames = { running: t.running, finished: t.finished, uncertain: t.uncertain }
+  return <Box direction="column" gap="lg" padding="md">
+    <Stack gap="xs">
+      <Row justify="between" align="center" gap="sm" wrap>
+        <Heading>Traffic Light</Heading>
+        <Badge tone={read(nativeStatus) === 'unavailable' ? 'danger' : read(nativeEnabled) ? 'accent' : 'neutral'}>{read(nativeStatus) === 'unavailable' ? t.chatError : read(nativeEnabled) ? t.chatOn : t.chatOff}</Badge>
+      </Row>
+      <Text muted size="sm">{t.summary}</Text>
+    </Stack>
+
+    <Stack gap="sm">
+      <Heading level={2}>{t.detected}</Heading>
+      <Text muted size="xs">{t.detectedHelp}</Text>
+      <Box direction="column" gap="md" padding="md" border radius="md" background="card">
+        {grouped.map(({ category, title }) => {
+          const found = [...resources.values()].filter((item) => item.category === category)
+          return <Stack key={category} gap="xs">
+            <Row justify="between" align="center" gap="sm">
+              <Text size="sm" weight="semibold">{title}</Text>
+              <Text size="xs" muted>{String(found.length)}</Text>
+            </Row>
+            {found.length === 0 ? <Text muted size="xs">{t.none}</Text> : found.map((resource) =>
+              <Row key={`${resource.category}:${resource.name}`} justify="between" align="center" gap="sm" wrap>
+                <Box minWidth={0} grow><Text size="sm" truncate>{resource.name}</Text></Box>
+                <Badge>{resource.evidence === 'observed' ? t.direct : t.inferred}</Badge>
+              </Row>)}
+          </Stack>
+        })}
+      </Box>
+      <Text muted size="xs">{t.empty}</Text>
+    </Stack>
+
+    <Stack gap="sm">
+      <Heading level={2}>{t.agent}</Heading>
+      {read(nativeStatus) === 'unavailable' ? <Text tone="danger">{t.unavailable}</Text> :
+        !read(nativeEnabled) ? <Text muted size="sm">{t.agentOff}</Text> : read(nativeActivities).length === 0 ? <Text muted size="sm">{t.agentNone}</Text> :
+        <Box direction="column" gap="sm" padding="md" border radius="md" background="card">
+          {read(nativeActivities).map((activity, i) => <Row key={String(i)} justify="between" align="center" gap="sm" wrap>
+            <Box minWidth={0} grow><Text size="sm" truncate>{(activity.agentType ?? 'Agent') + (activity.toolName ? ' · ' + activity.toolName : '')}</Text></Box>
+            <Badge tone={activity.state === 'working' ? 'accent' : activity.state === 'blocked' ? 'warning' : 'neutral'}>{stateNames[activity.state]}</Badge>
+          </Row>)}
+        </Box>}
+      {read(journalStatus) === 'truncated' ? <Text muted size="xs">{t.truncated}</Text> : read(journalStatus) === 'unavailable' ? <Text muted size="xs">{t.historyUnavailable}</Text> : null}
+    </Stack>
+
+    {read(failed) ? <Row gap="sm" align="center" wrap><Text tone="danger">{t.failed}</Text><Button size="sm" onPress={refresh}>{t.retry}</Button></Row> : null}
+    <Separator />
+    <Collapsible title={`${t.toolCalls} · ${items.length}`}>
+      <Stack gap="sm">
+        <Text muted size="xs">{t.toolHelp}</Text>
+        {read(loading) ? <Text>{t.loading}</Text> : read(failed) ? null : !read(workspace) ? <Text>{t.noWorkspace}</Text> : items.length === 0 ? <Text muted size="sm">{t.toolNone}</Text> :
+          items.map((call) => <Row key={call.id} justify="between" align="center" gap="sm" wrap>
+            <Box direction="column" gap="xs" minWidth={0} grow><Text size="sm" truncate>{call.tool}</Text><Text muted size="xs">{call.agent}</Text></Box>
+            <Badge tone={call.state === 'running' ? 'warning' : 'neutral'}>{callNames[call.state]}</Badge>
+          </Row>)}
+        <Text muted size="xs">{t.toolDetail}</Text>
+      </Stack>
+    </Collapsible>
+    <Collapsible title={t.settings}>
+      <Stack gap="sm">
+        <Switch label={t.setting} checked={read(nativeEnabled)} onChange={changeNative} />
+        <Text size="xs">{t.privacy}</Text>
+        <Collapsible title={t.privacyMore}><Text muted size="xs">{t.privacyDetail}</Text></Collapsible>
+      </Stack>
+    </Collapsible>
+  </Box>
 }
