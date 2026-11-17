@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 2,
+  "id": "traffic-light",
+  "name": "Traffic Light",
+  "version": "0.1.0",
+  "description": "Observe tool calls from local agents in Orca terminals.",
+  "license": "MIT-0",
+  "engines": { "orca": ">=1.4.248" },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "capabilities": [{ "kind": "workspace:read" }],
+  "contributes": {
+    "panels": [{ "id": "traffic-light", "title": "Traffic Light", "icon": "activity", "entry": "src/panel.tsx", "ui": "components" }],
+    "hooks": [{ "event": "agent.tool.before" }, { "event": "agent.tool.after" }]
+  }
+}
