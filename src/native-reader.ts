@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { parseNativeActivity, parseNativeResources, parseNativeActiveResources, nativeSessionIds, nativeWorkingSessionIds, type NativeActivity } from './native-activity'
+import { parseNativeActivity, parseNativeResources, parseNativeActiveResources, nativeSessionIds, nativeWorkingSessionIds, nativeWorkingChildIds, type NativeActivity } from './native-activity'
 import type { ResourceObservation } from './resource-classifier'
 import { readJournalActivity, type JournalResult } from './journal-activity'
 
@@ -38,7 +38,7 @@ export function fetchSnapshot(): Promise<unknown> {
 }
 
 /** Requests are deduplicated and never issued until the setting is explicitly true. */
-export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace, fetch: FetchSnapshot, journal: (sessionId: string) => Promise<JournalResult> = readJournalActivity) {
+export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace, fetch: FetchSnapshot, journal: (sessionId: string, children: ReadonlySet<string>) => Promise<JournalResult> = (id, children) => readJournalActivity(id, undefined, children)) {
   let inFlight: Promise<NativeResult> | null = null
   let workspaceId: string | null = null
   let epoch = 0
@@ -60,7 +60,8 @@ export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace,
           return empty('disabled')
         }
         const sessions = nativeSessionIds(snapshot, id)
-        const journals = await Promise.all(sessions.ids.map((sessionId) => journal(sessionId)))
+        const children = nativeWorkingChildIds(snapshot, id)
+        const journals = await Promise.all(sessions.ids.map((sessionId) => journal(sessionId, children.get(sessionId) ?? new Set())))
         if (epoch !== requestEpoch || !(await enabled()) || (await workspace()) !== id) {
           clear()
           return empty('disabled')

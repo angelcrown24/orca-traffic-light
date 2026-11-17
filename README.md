@@ -6,6 +6,8 @@ An Orca sidebar showing observed skill, plugin, MCP and tool activity from agent
 
 The panel lists skill, plugin and MCP names found in tool calls and skill file paths. A path reference alone does not prove execution. The list is incomplete and an absent name does not imply it was unused.
 
+The agent activity section also shows subagents and their reported states when Orca exposes them. A state Orca cannot verify is shown as unverified.
+
 **In use** marks names detected during an ongoing agent turn in the current workspace, or during a running local terminal tool call. The badge clears when the turn or call ends. Detection may miss activity or match a referenced path that was not actually executed. If a terminal call's completion event is lost, its badge expires after five minutes; very long calls may therefore lose their badge early.
 
 

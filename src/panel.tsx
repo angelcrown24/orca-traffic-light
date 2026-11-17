@@ -91,7 +91,7 @@ const labels = {
     detected: 'Detected items', detectedHelp: 'Names found in tool calls and skill file paths. In use marks activity detected during an ongoing agent turn.',
     skill: 'Skills', plugin: 'Plugins', mcp: 'MCP servers', none: 'No items detected yet',
     empty: 'An empty list does not mean an item was unused.', inUse: 'In use',
-    agent: 'Agent activity', agentNone: 'No agent activity reported.', agentOff: 'Turn on chat activity in settings to see agent status.', unavailable: 'Could not load chat activity.',
+    agent: 'Agent activity', subagents: 'Subagents', subagent: 'Subagent', agentNone: 'No agent activity reported.', agentOff: 'Turn on chat activity in settings to see agent status.', unavailable: 'Could not load chat activity.',
     truncated: 'Only recent chat history is shown.', historyUnavailable: 'Recent chat history is unavailable.',
     toolCalls: 'Recent tool calls', toolHelp: 'Local terminal calls observed since the plugin started.',
     toolNone: 'No terminal calls observed yet.', noWorkspace: 'Open a workspace to see activity.',
@@ -101,7 +101,7 @@ const labels = {
     privacyMore: 'How activity is read',
     privacyDetail: 'Only agent status, tool and detected names are displayed. Inputs and conversation data are not saved, logged or sent by this plugin. Reads run while this panel is visible. Activity may be incomplete and short calls can be missed.',
     toolDetail: 'Finished means the call ended, not that it succeeded. Calls without IDs are matched by inference; ambiguous calls are uncertain. Calls without a terminal ID are omitted.',
-    working: 'Working', blocked: 'Blocked', waiting: 'Waiting', done: 'Done',
+    working: 'Working', blocked: 'Blocked', waiting: 'Waiting', done: 'Done', unverifiable: 'Unverified',
     running: 'Awaiting finish', finished: 'Finished', uncertain: 'Uncertain'
   },
   ko: {
@@ -109,7 +109,7 @@ const labels = {
     detected: '감지된 항목', detectedHelp: '도구 호출과 스킬 파일 경로에서 찾은 이름입니다. 현재 사용 중은 진행 중인 에이전트 작업에서 감지된 항목입니다.',
     skill: '스킬', plugin: '플러그인', mcp: 'MCP 서버', none: '감지된 항목 없음',
     empty: '목록에 없어도 설치했거나 사용했을 수 있습니다.', inUse: '현재 사용 중',
-    agent: '에이전트 활동', agentNone: '보고된 에이전트 활동이 없습니다.', agentOff: '설정에서 채팅 활동을 켜면 상태를 볼 수 있습니다.', unavailable: '채팅 활동을 불러오지 못했습니다.',
+    agent: '에이전트 활동', subagents: '서브에이전트', subagent: '서브에이전트', agentNone: '보고된 에이전트 활동이 없습니다.', agentOff: '설정에서 채팅 활동을 켜면 상태를 볼 수 있습니다.', unavailable: '채팅 활동을 불러오지 못했습니다.',
     truncated: '최근 채팅 기록 일부만 표시합니다.', historyUnavailable: '최근 채팅 기록을 불러올 수 없습니다.',
     toolCalls: '최근 도구 호출', toolHelp: '플러그인 실행 중 관측한 로컬 터미널 호출입니다.',
     toolNone: '관측된 터미널 호출이 없습니다.', noWorkspace: '작업공간을 열어 활동을 확인하세요.',
@@ -119,7 +119,7 @@ const labels = {
     privacyMore: '어떤 정보를 읽나요?',
     privacyDetail: '화면에는 에이전트 상태, 도구 및 감지된 이름만 표시합니다. 입력과 대화 내용은 이 플러그인이 저장·기록·전송하지 않습니다. 패널이 보이는 동안 조회하며 짧은 활동은 놓칠 수 있습니다.',
     toolDetail: '완료는 호출 종료를 뜻하며 성공 여부는 알 수 없습니다. 호출 ID가 없으면 추정해 연결하고, 모호한 경우 불확실로 표시합니다. 터미널 ID가 없는 호출은 제외합니다.',
-    working: '작업 중', blocked: '차단됨', waiting: '대기 중', done: '완료',
+    working: '작업 중', blocked: '차단됨', waiting: '대기 중', done: '완료', unverifiable: '확인 불가',
     running: '종료 대기', finished: '종료됨', uncertain: '불확실'
   }
 } as const
@@ -141,8 +141,15 @@ export default function Panel() {
     { category: 'mcp', title: t.mcp },
     { category: 'plugin', title: t.plugin }
   ] as const
-  const stateNames = { working: t.working, blocked: t.blocked, waiting: t.waiting, done: t.done }
+  const stateNames = { working: t.working, blocked: t.blocked, waiting: t.waiting, done: t.done, unverifiable: t.unverifiable }
   const callNames = { running: t.running, finished: t.finished, uncertain: t.uncertain }
+  const activities = read(nativeActivities)
+  const mainAgents = activities.filter((activity) => activity.role !== 'subagent')
+  const subagents = activities.filter((activity) => activity.role === 'subagent')
+  const activityRow = (activity: typeof activities[number], index: number, isSubagent: boolean) => <Row key={`${isSubagent ? 'sub' : 'main'}:${index}`} justify="between" align="center" gap="sm" wrap>
+    <Box minWidth={0} grow><Text size="sm" truncate>{(activity.label || activity.agentType || (isSubagent ? t.subagent : 'Agent')) + (activity.toolName ? ' · ' + activity.toolName : '')}</Text></Box>
+    <Badge tone={activity.state === 'working' ? 'accent' : activity.state === 'blocked' ? 'warning' : 'neutral'}>{stateNames[activity.state]}</Badge>
+  </Row>
   return <Box direction="column" gap="lg" padding="md">
     <Stack gap="xs">
       <Row justify="between" align="center" gap="sm" wrap>
@@ -177,12 +184,14 @@ export default function Panel() {
     <Stack gap="sm">
       <Heading level={2}>{t.agent}</Heading>
       {read(nativeStatus) === 'unavailable' ? <Text tone="danger">{t.unavailable}</Text> :
-        !read(nativeEnabled) ? <Text muted size="sm">{t.agentOff}</Text> : read(nativeActivities).length === 0 ? <Text muted size="sm">{t.agentNone}</Text> :
+        !read(nativeEnabled) ? <Text muted size="sm">{t.agentOff}</Text> : activities.length === 0 ? <Text muted size="sm">{t.agentNone}</Text> :
         <Box direction="column" gap="sm" padding="md" border radius="md" background="card">
-          {read(nativeActivities).map((activity, i) => <Row key={String(i)} justify="between" align="center" gap="sm" wrap>
-            <Box minWidth={0} grow><Text size="sm" truncate>{(activity.agentType ?? 'Agent') + (activity.toolName ? ' · ' + activity.toolName : '')}</Text></Box>
-            <Badge tone={activity.state === 'working' ? 'accent' : activity.state === 'blocked' ? 'warning' : 'neutral'}>{stateNames[activity.state]}</Badge>
-          </Row>)}
+          {mainAgents.map((activity, i) => activityRow(activity, i, false))}
+          {subagents.length > 0 ? <Stack gap="sm">
+            {mainAgents.length > 0 ? <Separator /> : null}
+            <Row justify="between" align="center" gap="sm"><Text size="sm" weight="semibold">{t.subagents}</Text><Text size="xs" muted>{String(subagents.length)}</Text></Row>
+            {subagents.map((activity, i) => activityRow(activity, i, true))}
+          </Stack> : null}
         </Box>}
       {read(journalStatus) === 'truncated' ? <Text muted size="xs">{t.truncated}</Text> : read(journalStatus) === 'unavailable' ? <Text muted size="xs">{t.historyUnavailable}</Text> : null}
     </Stack>

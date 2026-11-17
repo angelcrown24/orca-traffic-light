@@ -37,7 +37,7 @@ function skillArgument(input: unknown): string | undefined {
 }
 
 /** Return only resource labels; never include a command, file contents, or tool payload. */
-export function classifyResources(tool: string, input: unknown): ResourceObservation[] {
+export function classifyResources(tool: string, input: unknown, mcpIdentity?: { server: unknown; tool: unknown }): ResourceObservation[] {
   const results: ResourceObservation[] = []
   const seen = new Set<string>()
   const add = (category: ResourceObservation['category'], name: string, evidence: ResourceObservation['evidence']) => {
@@ -49,7 +49,10 @@ export function classifyResources(tool: string, input: unknown): ResourceObserva
   }
 
   const mcp = /^mcp__([A-Za-z0-9][A-Za-z0-9._-]{0,127})__[^\s]+$/.exec(tool)
-  if (mcp) add('mcp', mcp[1], 'observed')
+  const explicitMcp = typeof mcpIdentity?.server === 'string' && IDENTIFIER.test(mcpIdentity.server)
+    && typeof mcpIdentity.tool === 'string' && mcpIdentity.tool.length > 0 && mcpIdentity.tool.length <= 256
+  if (explicitMcp) add('mcp', mcpIdentity.server as string, 'observed')
+  else if (mcp) add('mcp', mcp[1], 'observed')
 
   if (/^(?:skill|skill\.prompt)$/i.test(tool)) {
     const argument = skillArgument(input)
@@ -63,7 +66,7 @@ export function classifyResources(tool: string, input: unknown): ResourceObserva
     }
   }
 
-  if (!mcp && PATH_TOOLS.test(tool)) {
+  if (!mcp && !explicitMcp && PATH_TOOLS.test(tool)) {
     for (const text of inputStrings(input)) {
       PATH_TO_SKILL.lastIndex = 0
       for (const match of text.matchAll(PATH_TO_SKILL)) add('skill', match[1], 'inferred')

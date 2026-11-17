@@ -20,6 +20,14 @@ test('recognizes MCP namespace without guessing plugin ownership', () => {
     { category: 'mcp', name: 'server_name', evidence: 'observed' }
   ])
   assert.deepEqual(classifyResources('mcp__server', null), [])
+  assert.deepEqual(classifyResources('hindsight/hindsight_search_pages', null, { server: 'hindsight', tool: 'hindsight_search_pages' }), [
+    { category: 'mcp', name: 'hindsight', evidence: 'observed' }
+  ])
+  assert.deepEqual(classifyResources('cua_repl/js', null, { server: 'cua_repl', tool: 'js' }), [
+    { category: 'mcp', name: 'cua_repl', evidence: 'observed' }
+  ])
+  assert.deepEqual(classifyResources('collaboration/spawn_agent', null), [])
+  assert.deepEqual(classifyResources('functions/exec', null, { server: 'functions', tool: '' }), [])
 })
 
 test('infers referenced skill from approved file and script paths without exposing input', () => {

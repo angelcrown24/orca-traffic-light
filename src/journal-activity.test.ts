@@ -31,7 +31,7 @@ test('returns resource names only and deduplicates them', async () => {
 
 test('marks only tool calls belonging to the running root turn as active', async () => {
   const result = await readJournalActivity(id, async () => [meta,
-    { kind: 'call', name: 'shell', input: 'cat /tmp/skills/current/SKILL.md', active: 1 },
+    { kind: 'call', name: 'shell', input: 'cat /tmp/skills/current/SKILL.md', active: 1, is_root: 1 },
     { kind: 'call', name: 'shell', input: 'cat /tmp/skills/old/SKILL.md', active: 0 },
   ])
   assert.deepEqual(result.activeResources, [{ category: 'skill', name: 'current', evidence: 'inferred' }])
@@ -40,6 +40,28 @@ test('marks only tool calls belonging to the running root turn as active', async
     { kind: 'call', name: 'shell', input: 'cat /tmp/skills/current/SKILL.md', active: 0 },
   ])
   assert.deepEqual(noTurn.activeResources, [])
+})
+
+test('uses explicit journal MCP identity without treating slash-named built-ins as MCP', async () => {
+  const result = await readJournalActivity(id, async () => [meta,
+    { kind: 'call', name: 'hindsight/hindsight_search_pages', input: 'private', active: 1, is_root: 1, mcp_server: 'hindsight', mcp_tool: 'hindsight_search_pages' },
+    { kind: 'call', name: 'collaboration/spawn_agent', input: 'private', active: 1, is_root: 1, mcp_server: null, mcp_tool: null }
+  ])
+  assert.deepEqual(result.activeResources, [{ category: 'mcp', name: 'hindsight', evidence: 'observed' }])
+  assert.equal(JSON.stringify(result).includes('private'), false)
+})
+
+test('marks child calls active only for the exact live working producer in the current turn', async () => {
+  const rows = [meta,
+    { kind: 'call', name: 'shell', input: 'cat /skills/live/SKILL.md', active: 1, is_root: 0, producer: 'live-child' },
+    { kind: 'call', name: 'shell', input: 'cat /skills/done/SKILL.md', active: 1, is_root: 0, producer: 'done-child' },
+    { kind: 'call', name: 'shell', input: 'cat /skills/old/SKILL.md', active: 0, is_root: 0, producer: 'live-child' },
+    { kind: 'call', name: 'shell', input: 'cat /skills/root/SKILL.md', active: 1, is_root: 1, producer: null }
+  ]
+  const r = await readJournalActivity(id, async () => rows, new Set(['live-child']))
+  assert.deepEqual(r.activeResources?.map((x) => x.name), ['live', 'root'])
+  const noChildren = await readJournalActivity(id, async () => rows)
+  assert.deepEqual(noChildren.activeResources?.map((x) => x.name), ['root'])
 })
 
 test('fails closed for old or malformed schemas and runtime errors', async () => {

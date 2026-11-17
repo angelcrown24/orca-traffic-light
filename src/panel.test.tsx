@@ -51,6 +51,34 @@ test('native activity is off by default and only requested after explicit opt-in
   } finally { await view.unmount() }
 })
 
+test('shows live subagents separately and removes them when they are no longer reported', async () => {
+  let hasSubagents = true
+  const host = mockHost({ settings: { nativeActivity: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [
+      { agentType: 'codex', state: 'working', toolName: null },
+      ...(hasSubagents ? [
+        { role: 'subagent' as const, label: 'review', agentType: 'codex', state: 'working' as const, toolName: null },
+        { role: 'subagent' as const, label: 'audit', agentType: 'codex', state: 'unverifiable' as const, toolName: null }
+      ] : [])
+    ] })
+  } })
+  const view = await mount(panel, { host, locale: 'ko-KR' })
+  try {
+    assert.equal(Boolean(view.find({ text: 'codex' })), true)
+    assert.equal(Boolean(view.find({ text: '서브에이전트' })), true)
+    assert.equal(Boolean(view.find({ text: 'review' })), true)
+    assert.equal(Boolean(view.find({ text: 'audit' })), true)
+    assert.equal(Boolean(view.find({ text: '확인 불가' })), true)
+    hasSubagents = false
+    await view.emit('workspace.changed', { context: null })
+    assert.equal(view.find({ text: '서브에이전트' }), null)
+    assert.equal(view.find({ text: 'review' }), null)
+    assert.equal(Boolean(view.find({ text: 'codex' })), true)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
 
 test('does not request native activity while the panel is hidden', async () => {
   let requests = 0

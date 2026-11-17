@@ -3,8 +3,10 @@ import { classifyResources, type ResourceObservation } from './resource-classifi
 /** A deliberately narrow view of an Orca workspace agent's current reported activity. */
 export type NativeActivity = {
   agentType: string | null
-  state: 'working' | 'blocked' | 'waiting' | 'done'
+  state: 'working' | 'blocked' | 'waiting' | 'done' | 'unverifiable'
   toolName: string | null
+  role?: 'subagent'
+  label?: string
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -43,11 +45,30 @@ export function parseNativeActivity(response: unknown, workspaceId: string): Nat
   const row = workspaceRow(response, workspaceId)
   if (!row || !Array.isArray(row.agents)) return []
   const activities: NativeActivity[] = []
+  const seenChildren = new Set<string>()
+  const addChildren = (children: unknown, parentType: string | null, observation: unknown, depth: number): void => {
+    if (!Array.isArray(children) || depth > 3 || seenChildren.size >= 50) return
+    for (const value of children.slice(0, 50)) {
+      if (seenChildren.size >= 50) break
+      const child = object(value)
+      if (!child || typeof child.id !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(child.id) || seenChildren.has(child.id)) continue
+      const state = child.state
+      if (state !== 'working' && state !== 'blocked' && state !== 'waiting' && state !== 'idle' && state !== 'unverifiable') continue
+      seenChildren.add(child.id)
+      // Only short machine-style task identifiers are displayed, never arbitrary descriptions or prompts.
+      const name = typeof child.description === 'string' && /^[a-z][a-z0-9_]{0,31}$/.test(child.description) ? child.description : undefined
+      activities.push({ agentType: parentType, state: observation !== 'live' || child.membership !== 'live' || state === 'unverifiable' ? 'unverifiable' : state === 'idle' ? 'waiting' : state,
+        toolName: null, role: 'subagent', ...(name ? { label: name } : {}) })
+      addChildren(child.children, parentType, observation, depth + 1)
+    }
+  }
   for (const value of row.agents) {
     const agent = object(value)
     const state = agent?.state
     if (state !== 'working' && state !== 'blocked' && state !== 'waiting' && state !== 'done') continue
-    activities.push({ agentType: label(agent?.agentType), state, toolName: label(agent?.toolName) })
+    const agentType = label(agent?.agentType)
+    activities.push({ agentType, state, toolName: label(agent?.toolName) })
+    addChildren(agent?.children, agentType, agent?.subagentObservation, 1)
   }
   return activities
 }
@@ -107,4 +128,34 @@ export function nativeWorkingSessionIds(response: unknown, workspaceId: string):
     if (match && eligible.has(match[1])) working.add(match[1])
   }
   return working
+}
+
+/** Only live, working children of the exact local session can make their tool calls active. */
+export function nativeWorkingChildIds(response: unknown, workspaceId: string): Map<string, Set<string>> {
+  const row = workspaceRow(response, workspaceId)
+  const result = new Map<string, Set<string>>()
+  if (!row || row.hostId !== 'local' || !Array.isArray(row.agents)) return result
+  const eligible = nativeWorkingSessionIds(response, workspaceId)
+  const parents = new Map<string, Record<string, unknown>[]>()
+  for (const value of row.agents) {
+    const parent = object(value)
+    if (parent?.structuredHostOwned !== true || typeof parent.paneKey !== 'string') continue
+    const id = /^structured-agent-session-([^:]+):[^:]+$/.exec(parent.paneKey)?.[1]
+    if (!id || !eligible.has(id)) continue
+    const group = parents.get(id) ?? []
+    group.push(parent)
+    parents.set(id, group)
+  }
+  for (const [id, group] of parents) {
+    if (group.length !== 1 || group[0].subagentObservation !== 'live' || !Array.isArray(group[0].children)) continue
+    const states = new Map<string, boolean>()
+    for (const value of group[0].children.slice(0, 50)) {
+      const child = object(value)
+      if (!child || typeof child.providerId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(child.providerId)) continue
+      const live = child.membership === 'live' && child.state === 'working'
+      states.set(child.providerId, states.has(child.providerId) ? false : live)
+    }
+    result.set(id, new Set([...states].filter(([, live]) => live).map(([childId]) => childId)))
+  }
+  return result
 }

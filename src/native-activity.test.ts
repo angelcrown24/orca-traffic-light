@@ -1,5 +1,24 @@
 import { assert, test } from 'orca/testing'
-import { parseNativeActivity, parseNativeResources } from './native-activity'
+import { parseNativeActivity, parseNativeResources, nativeWorkingChildIds } from './native-activity'
+
+test('identifies only live working child provider IDs in the exact local workspace', () => {
+  const sid = 'codex_12345678_abcd_1234_abcd_123456789abc'
+  const parent = { structuredHostOwned: true, paneKey: `structured-agent-session-${sid}:pane`, state: 'working', subagentObservation: 'live', children: [
+    { providerId: 'live-child', membership: 'live', state: 'working' },
+    { providerId: 'done-child', membership: 'live', state: 'done' },
+    { providerId: 'stale-child', membership: 'stale', state: 'working' },
+    { providerId: 'unknown-child', state: 'working' },
+    { providerId: 'ambiguous', membership: 'live', state: 'working' },
+    { providerId: 'ambiguous', membership: 'live', state: 'working' }
+  ] }
+  const snapshot = { result: { worktrees: [{ hostId: 'local', address: { worktree: 'identity:one' }, agents: [parent] }] } }
+  assert.deepEqual([...nativeWorkingChildIds(snapshot, 'identity:one').get(sid)!], ['live-child'])
+  assert.equal(nativeWorkingChildIds(snapshot, 'identity:other').size, 0)
+  const stale = { result: { worktrees: [{ hostId: 'local', address: { worktree: 'identity:one' }, agents: [{ ...parent, subagentObservation: 'unverifiable' }] }] } }
+  assert.equal(nativeWorkingChildIds(stale, 'identity:one').size, 0)
+  const finished = { result: { worktrees: [{ hostId: 'local', address: { worktree: 'identity:one' }, agents: [{ ...parent, state: 'done' }] }] } }
+  assert.equal(nativeWorkingChildIds(finished, 'identity:one').size, 0)
+})
 
 test('extracts only activity for the exact workspace and drops private data', () => {
   const response = { result: { worktrees: [
@@ -25,6 +44,45 @@ test('returns no rows for missing, malformed or ambiguous workspace data', () =>
   assert.deepEqual(parseNativeActivity({ result: { worktrees: [row, row] } }, 'identity:one'), [])
   assert.deepEqual(parseNativeActivity({ result: { worktrees: [row] } }, ''), [])
   assert.deepEqual(parseNativeActivity({ result: { worktrees: [{ ...row, agents: [null, { state: 'bad' }] }] } }, 'identity:one'), [])
+})
+
+test('reports bounded subagent state only for the matching workspace without private task text', () => {
+  const child = { id: 'child-1', description: 'subagent_audit', state: 'working', membership: 'live', prompt: 'private prompt', toolInput: 'secret' }
+  const response = { result: { worktrees: [
+    { address: { worktree: 'identity:one' }, agents: [
+      { agentType: 'codex', state: 'working', subagentObservation: 'live', children: [child, child,
+        { id: 'child-2', state: 'idle', membership: 'live', description: 'Private free-form task' },
+        { id: 'child-3', state: 'unverifiable', membership: 'live', description: 'reviewer' },
+        { id: 'bad id!', state: 'working' }, { id: 'child-4', state: 'unknown' }] }
+    ] },
+    { address: { worktree: 'identity:other' }, agents: [{ agentType: 'codex', state: 'working', children: [{ id: 'foreign', state: 'working' }] }] }
+  ] } }
+  const result = parseNativeActivity(response, 'identity:one')
+  assert.deepEqual(result, [
+    { agentType: 'codex', state: 'working', toolName: null },
+    { agentType: 'codex', state: 'working', toolName: null, role: 'subagent', label: 'subagent_audit' },
+    { agentType: 'codex', state: 'waiting', toolName: null, role: 'subagent' },
+    { agentType: 'codex', state: 'unverifiable', toolName: null, role: 'subagent', label: 'reviewer' }
+  ])
+  assert.equal(JSON.stringify(result).includes('private'), false)
+  assert.equal(JSON.stringify(result).includes('secret'), false)
+  assert.equal(JSON.stringify(result).includes('foreign'), false)
+})
+
+test('marks child status unverifiable when its parent observation is stale', () => {
+  const response = { result: { worktrees: [{ worktreeId: 'one', agents: [{ agentType: 'codex', state: 'working', subagentObservation: 'unverifiable', children: [{ id: 'child', membership: 'live', state: 'working' }] }] }] } }
+  assert.equal(parseNativeActivity(response, 'one')[1].state, 'unverifiable')
+})
+
+test('does not present non-live or unknown child membership as working', () => {
+  const children = [
+    { id: 'current', state: 'working', membership: 'live' },
+    { id: 'settled', state: 'working', membership: 'settled' },
+    { id: 'missing', state: 'working' },
+    { id: 'unknown', state: 'working', membership: 'unexpected' }
+  ]
+  const response = { result: { worktrees: [{ worktreeId: 'one', agents: [{ agentType: 'codex', state: 'working', subagentObservation: 'live', children }] }] } }
+  assert.deepEqual(parseNativeActivity(response, 'one').slice(1).map((x) => x.state), ['working', 'unverifiable', 'unverifiable', 'unverifiable'])
 })
 
 
