@@ -2,6 +2,13 @@ import type { OrcaWorkerApi } from 'orca/worker'
 import type { Call } from './protocol'
 import { createNativeReader, fetchSnapshot } from './native-reader'
 import { classifyResources, type ResourceObservation } from './resource-classifier'
+import { createToolboxManager } from '../runtime/toolbox-manager.mjs'
+
+const toolboxManagers = new Set<ReturnType<typeof createToolboxManager>>()
+export async function deactivate(): Promise<void> {
+  await Promise.allSettled([...toolboxManagers].map(manager => manager.dispose()))
+  toolboxManagers.clear()
+}
 
 // Identifiers are used only to pair events. Inputs and outputs are never retained.
 type ObservedCall = { call: Call; order: number; callId?: string; resources: ResourceObservation[]; startedAt: number }
@@ -20,6 +27,20 @@ function mergeResources(items: ResourceObservation[]): ResourceObservation[] {
 }
 
 export default function activate(orca: OrcaWorkerApi): void {
+  const toolbox = createToolboxManager({
+    getContext: () => orca.host.call('workspace.readContext'),
+    getWorkspaces: () => orca.host.call('workspace.list'),
+    post: () => orca.panels.post('toolbox.changed', {}),
+    loadSelection: id => orca.storage.get(`toolbox-selection:${id}`),
+    saveSelection: (id, ids) => orca.storage.set(`toolbox-selection:${id}`, ids)
+  })
+  toolboxManagers.add(toolbox)
+  orca.panels.handle('toolbox.catalog', toolbox.catalog)
+  orca.panels.handle('toolbox.state', toolbox.state)
+  orca.panels.handle('toolbox.select', toolbox.select)
+  orca.panels.handle('toolbox.prepare', toolbox.prepare)
+  orca.panels.handle('toolbox.revoke', toolbox.revoke)
+  orca.panels.handle('toolbox.copy', toolbox.copy)
   const terminals = new Map<string, Map<string, ObservedCall>>()
   let order = 0
 

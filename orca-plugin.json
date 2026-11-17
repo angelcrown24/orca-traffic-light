@@ -2,11 +2,11 @@
   "manifestVersion": 2,
   "id": "traffic-light",
   "name": "Traffic Light",
-  "version": "0.3.4",
-  "description": "Show observed skill, plugin, MCP and agent activity.",
+  "version": "0.4.0",
+  "description": "Observe agent activity and use selected shared skills and tools on demand.",
   "license": "MIT-0",
   "engines": {
-    "orca": ">=1.4.248"
+    "orca": ">=1.4.261"
   },
   "execution": "trusted-worker",
   "pluginApi": 1,
@@ -17,6 +17,9 @@
     },
     {
       "kind": "settings:own"
+    },
+    {
+      "kind": "storage:own"
     }
   ],
   "contributes": {

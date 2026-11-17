@@ -1,8 +1,10 @@
-import { atom, Badge, Box, Button, Collapsible, env, Heading, on, plugin, read, Row, Separator, set, settings, Stack, Switch, Text, type PanelContext } from 'orca'
+import { atom, Badge, Box, Button, Collapsible, env, Heading, on, plugin, read, Row, Separator, set, settings, Stack, Switch, Tab, Tabs, Text, type PanelContext } from 'orca'
 import type { Call } from './protocol'
 import type { NativeActivity } from './native-activity'
 import type { ResourceObservation } from './resource-classifier'
+import { ArchitecturePanel, ToolboxPanel, openToolbox, setupToolbox } from './toolbox-panel'
 
+const tab = atom('traffic-light.tab', 'activity', { persist: 'workspace' })
 const calls = atom<Call[]>([])
 const terminalResources = atom<ResourceObservation[]>([])
 const nativeResources = atom<ResourceObservation[]>([])
@@ -75,12 +77,13 @@ async function changeNative(enabled: boolean): Promise<void> {
   } catch { set(nativeEnabled, false); set(nativeActiveResources, []); set(nativeStatus, 'unavailable') }
 }
 export function setup(ctx: PanelContext): void {
-  isPanelVisible = () => read(ctx.visible)
+  isPanelVisible = () => read(ctx.visible) && read(tab) === 'activity'
+  setupToolbox(ctx, () => read(tab) === 'library')
   ctx.subscriptions.push({ dispose: () => { isPanelVisible = () => false } })
   ctx.subscriptions.push(plugin.on('calls.changed', () => { void refresh() }))
   ctx.subscriptions.push(on('workspace.changed', () => { set(calls, []); set(terminalResources, []); set(terminalActiveResources, []); nativeRequestId++; set(nativeActivities, []); set(nativeResources, []); set(nativeActiveResources, []); set(journalStatus, undefined); void refresh(); void refreshNative() }))
   ctx.subscriptions.push(settings.onDidChange(() => { void readNativeSetting().then(() => { if (!read(nativeEnabled)) { nativeRequestId++; set(nativeActivities, []); set(nativeResources, []); set(nativeActiveResources, []); set(journalStatus, undefined); set(nativeStatus, 'disabled') } }) }))
-  const timer = setInterval(() => { if (read(ctx.visible)) { void refresh(); void refreshNative() } }, 3000)
+  const timer = setInterval(() => { if (isPanelVisible()) { void refresh(); void refreshNative() } }, 3000)
   ctx.subscriptions.push({ dispose: () => clearInterval(timer) })
   void readNativeSetting().then(() => { if (read(nativeEnabled)) void refreshNative() })
   void refresh()
@@ -124,7 +127,7 @@ const labels = {
   }
 } as const
 
-export default function Panel() {
+function ActivityPanel() {
   const t = env.locale.toLowerCase().startsWith('ko') ? labels.ko : labels.en
   const items = read(calls)
   const resources = new Map<string, ResourceObservation>()
@@ -150,13 +153,12 @@ export default function Panel() {
     <Box minWidth={0} grow><Text size="sm" truncate>{(activity.label || activity.agentType || (isSubagent ? t.subagent : 'Agent')) + (activity.toolName ? ' · ' + activity.toolName : '')}</Text></Box>
     <Badge tone={activity.state === 'working' ? 'accent' : activity.state === 'blocked' ? 'warning' : 'neutral'}>{stateNames[activity.state]}</Badge>
   </Row>
-  return <Box direction="column" gap="lg" padding="md">
+  return <Box direction="column" gap="lg">
     <Stack gap="xs">
       <Row justify="between" align="center" gap="sm" wrap>
-        <Heading>Traffic Light</Heading>
+        <Heading level={2}>{t.summary}</Heading>
         <Badge tone={read(nativeStatus) === 'unavailable' ? 'danger' : read(nativeEnabled) ? 'accent' : 'neutral'}>{read(nativeStatus) === 'unavailable' ? t.chatError : read(nativeEnabled) ? t.chatOn : t.chatOff}</Badge>
       </Row>
-      <Text muted size="sm">{t.summary}</Text>
     </Stack>
 
     <Stack gap="sm">
@@ -216,5 +218,21 @@ export default function Panel() {
         <Collapsible title={t.privacyMore}><Text muted size="xs">{t.privacyDetail}</Text></Collapsible>
       </Stack>
     </Collapsible>
+  </Box>
+}
+
+export default function Panel() {
+  const ko = env.locale.toLowerCase().startsWith('ko')
+  return <Box direction="column" gap="md" padding="md">
+    <Heading>Traffic Light</Heading>
+    <Tabs label={ko ? 'Traffic Light 보기' : 'Traffic Light views'} value={read(tab)} onChange={async value => {
+      set(tab, value)
+      if (value === 'library') await openToolbox()
+      if (value === 'activity') { await refresh(); await refreshNative() }
+    }}>
+      <Tab value="activity" label={ko ? '활동' : 'Activity'} icon="activity"><ActivityPanel /></Tab>
+      <Tab value="library" label={ko ? '공용 도구' : 'Library'} icon="blocks"><ToolboxPanel /></Tab>
+      <Tab value="structure" label={ko ? '구조' : 'How it works'} icon="branch"><ArchitecturePanel /></Tab>
+    </Tabs>
   </Box>
 }
