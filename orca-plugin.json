@@ -2,16 +2,49 @@
   "manifestVersion": 2,
   "id": "traffic-light",
   "name": "Traffic Light",
-  "version": "0.1.0",
-  "description": "Observe tool calls from local agents in Orca terminals.",
+  "version": "0.2.0",
+  "description": "Show observed agent tool calls and optional Orca chat activity.",
   "license": "MIT-0",
-  "engines": { "orca": ">=1.4.248" },
+  "engines": {
+    "orca": ">=1.4.248"
+  },
   "execution": "trusted-worker",
   "pluginApi": 1,
   "main": "src/worker.ts",
-  "capabilities": [{ "kind": "workspace:read" }],
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "settings:own"
+    }
+  ],
   "contributes": {
-    "panels": [{ "id": "traffic-light", "title": "Traffic Light", "icon": "activity", "entry": "src/panel.tsx", "ui": "components" }],
-    "hooks": [{ "event": "agent.tool.before" }, { "event": "agent.tool.after" }]
+    "panels": [
+      {
+        "id": "traffic-light",
+        "title": "Traffic Light",
+        "icon": "activity",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "hooks": [
+      {
+        "event": "agent.tool.before"
+      },
+      {
+        "event": "agent.tool.after"
+      }
+    ],
+    "settings": [
+      {
+        "key": "nativeActivity",
+        "title": "Observe current native chat activity",
+        "description": "When enabled, runs Orca CLI to read workspace status, which includes prompts, tool inputs and assistant messages from all workspaces. Only agent status and tool names for the current workspace are displayed; short calls can be missed.",
+        "type": "boolean",
+        "default": false
+      }
+    ]
   }
 }
