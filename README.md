@@ -8,7 +8,7 @@ An Orca sidebar for agent activity and a shared, on-demand library of local skil
 
 1. Open **Library / 공용 도구** and search the skills and MCP configurations already installed on this computer.
 2. Choose up to 24 items for the current local workspace. Nothing is selected by default; browsing or selecting never starts an MCP server.
-3. Turn on **Connect automatically in new sessions / 새 세션에 자동 연결**. This installs a short shared instruction block and local launcher once. Subsequent sessions that load these instructions can search and use the selected capabilities without a pasted guide.
+3. Press **Connect / 연결** in the selection bar. This installs a short shared instruction block and local launcher once. Subsequent sessions that load these instructions can search and use the selected capabilities without a pasted guide. Connection switches and manual setup are under **Connection settings / 연결 설정**.
 4. The agent uses its existing shell tool to search a small amount of metadata, create its own connection handle, and read only a requested skill or discover/call only a requested MCP server. Changing the selection requires **Apply selection**; existing handles retain their prior selection.
 5. **Shared runner activity** shows actual start/completion/failure events for these requests. A skill read records content delivery, not proof that a model keeps applying it.
 
@@ -16,7 +16,7 @@ Automatic setup writes an owned block to `~/.agents/AGENTS.md`, preserves existi
 
 This requires **local Node.js 18+**, shell access, and an agent that loads and follows the shared instructions. Orca's plugin API cannot force instruction refresh in already-running native conversations or inject new native MCP tools. **Manual connection** remains a collapsed fallback for those conversations; restarting them is unnecessary. Existing provider-native MCP registrations and skill catalogs remain independent, so the plugin cannot remove context the provider already loads itself.
 
-Use **Add to shared store / 공용으로 모으기** on provider-only items, or **Sync selected** for a chosen batch. The architecture tab displays a connected diagram with current provider, shared-store, workspace and runtime counts. Counts distinguish **skills** from **MCP servers**; individual server tools are discovered only when requested.
+Use an item's details button for its description, source and **Add to shared store / 공용으로 모으기** action, or **Sync selected** for a chosen batch. Search and compact filters stay above the list; selection actions appear when items are selected. The architecture tab displays a connected diagram with current provider, shared-store, workspace and runtime counts. Counts distinguish **skills** from **MCP servers**; individual server tools are discovered only when requested.
 
 ```mermaid
 flowchart TD
