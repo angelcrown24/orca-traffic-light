@@ -2,8 +2,8 @@
   "manifestVersion": 2,
   "id": "traffic-light",
   "name": "Traffic Light",
-  "version": "0.4.0",
-  "description": "Observe agent activity and use selected shared skills and tools on demand.",
+  "version": "0.5.0",
+  "description": "Observe agent activity, sync shared capabilities, and connect agents on demand.",
   "license": "MIT-0",
   "engines": {
     "orca": ">=1.4.261"

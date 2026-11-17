@@ -10,14 +10,14 @@ const catalog: ToolboxCatalog = { items: [
 const initial = (): ToolboxState => ({ workspaceId: 'workspace-a', selected: [], bundle: null, events: [] })
 const calls = () => ({ workspace: true, calls: [] })
 
-test('does not discover capabilities until Library is opened', async () => {
+test('discovers metadata only when a catalog view is opened', async () => {
   let scans = 0
   const host = mockHost({ requests: { 'calls.get': calls, 'toolbox.catalog': () => { scans++; return catalog }, 'toolbox.state': initial } })
   const view = await mount(panel, { host })
   try {
     assert.equal(scans, 0)
     await view.select({ label: 'Traffic Light views' }, 'structure')
-    assert.equal(scans, 0)
+    assert.equal(scans, 1)
     assert.equal(Boolean(view.find({ text: 'One library. Only what you need.' })), true)
     await view.select({ label: 'Traffic Light views' }, 'library')
     assert.equal(scans, 1)
@@ -46,6 +46,44 @@ test('search and type filters do not start tools or change selections', async ()
   } finally { await view.unmount() }
 })
 
+test('sharing filter shows provider sources, updates and conflicts, resets pagination and clears on workspace change', async () => {
+  const inventory: ToolboxCatalog = { items: [
+    ...Array.from({ length: 31 }, (_, index) => ({ ...catalog.items[0], id: `shared-${index}`, name: `Shared ${index + 1}`, sharing: { state: 'shared' as const, canSync: false } })),
+    ...(['provider', 'update', 'conflict'] as const).map(state => ({ ...catalog.items[1], id: state, name: `${state} item`, sharing: { state, canSync: state !== 'conflict' } }))
+  ], warnings: [] }
+  let current = initial()
+  const host = mockHost({ requests: { 'calls.get': calls, 'toolbox.catalog': () => inventory, 'toolbox.state': () => current } })
+  const view = await mount(panel, { host })
+  try {
+    await view.select({ label: 'Traffic Light views' }, 'library')
+    await view.press({ text: 'Next' })
+    assert.equal(Boolean(view.find({ label: 'Shared 31' })), true)
+    await view.toggle({ label: 'Needs sharing or update' })
+    assert.equal(view.find({ label: 'Shared 31' }), null)
+    for (const status of ['provider', 'update', 'conflict']) assert.equal(Boolean(view.find({ label: `${status} item` })), true)
+    assert.equal(Boolean(view.find({ text: '3 results' })), true)
+    current = { ...initial(), workspaceId: 'workspace-b' }
+    await view.emit('workspace.changed', { context: null })
+    assert.equal(view.valueOf({ label: 'Needs sharing or update' }), false)
+    assert.equal(Boolean(view.find({ label: 'Shared 1' })), true)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('architecture labels provider counts directly and keeps connection details collapsed', async () => {
+  const host = mockHost({ requests: { 'calls.get': calls, 'toolbox.catalog': () => catalog, 'toolbox.state': initial } })
+  const view = await mount(panel, { host, locale: 'ko-KR' })
+  try {
+    await view.select({ label: 'Traffic Light 보기' }, 'structure')
+    assert.equal(Boolean(view.find({ text: '스킬 1' })), true)
+    assert.equal(Boolean(view.find({ text: 'MCP 1' })), true)
+    assert.equal(view.find({ text: '제공자 전용 내장 도구와 비공개 플러그인을 공용 도구로 변환하지는 않습니다.' }), null)
+    await view.toggle({ label: '연결 방식' })
+    assert.equal(Boolean(view.find({ text: '제공자 전용 내장 도구와 비공개 플러그인을 공용 도구로 변환하지는 않습니다.' })), true)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
 test('selection is explicit and preparing requires a separate action', async () => {
   let current = initial(), prepares = 0
   const host = mockHost({ requests: {
@@ -60,6 +98,7 @@ test('selection is explicit and preparing requires a separate action', async () 
     await view.toggle({ label: 'design-guide' })
     assert.deepEqual(current.selected, ['skill:design'])
     assert.equal(prepares, 0)
+    await view.toggle({ label: 'Manual connection' })
     await view.press({ text: 'Prepare use instructions' })
     assert.equal(prepares, 1)
     assert.equal(Boolean(view.find({ text: 'Instructions ready' })), true)
@@ -79,6 +118,7 @@ test('clearing a selection preserves an existing bundle until explicit revocatio
   const view = await mount(panel, { host })
   try {
     await view.select({ label: 'Traffic Light views' }, 'library')
+    await view.toggle({ label: 'Manual connection' })
     await view.press({ text: 'Clear selection' })
     assert.deepEqual(current.selected, [])
     assert.equal(revokes, 0)
@@ -96,6 +136,7 @@ test('resets selection on workspace changes and reloads only current workspace s
   const view = await mount(panel, { host })
   try {
     await view.select({ label: 'Traffic Light views' }, 'library')
+    await view.toggle({ label: 'Manual connection' })
     assert.equal(Boolean(view.find({ text: 'Instructions ready' })), true)
     current = { ...initial(), workspaceId: 'workspace-b' }
     await view.emit('workspace.changed', { context: null })
@@ -150,6 +191,7 @@ test('copying instructions uses the exact current bundle and provides manual fal
   try {
     await view.select({ label: 'Traffic Light views' }, 'library')
     assert.equal(attempts, 0)
+    await view.toggle({ label: 'Manual connection' })
     await view.press({ text: 'Copy instructions' })
     assert.equal(attempts, 1)
     assert.equal(Boolean(view.find({ text: 'Could not copy automatically. Select the guide text below and copy it manually.' })), true)
@@ -186,11 +228,70 @@ test('cannot replace prepared instructions or select more than the bundle limit'
   const view = await mount(panel, { host })
   try {
     await view.select({ label: 'Traffic Light views' }, 'library')
+    await view.toggle({ label: 'Manual connection' })
     assert.equal(view.find({ text: 'Prepare use instructions' })?.disabled, true)
     assert.equal(view.find({ label: 'Guide 25' })?.disabled, true)
     assert.equal(view.find({ label: 'Guide 1' })?.disabled, false)
     assert.equal(Boolean(view.find({ text: 'Revoke the existing instructions before preparing a new selection.' })), true)
     assert.equal(Boolean(view.find({ text: 'Up to 24 capabilities per selection.' })), true)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('automatic connection changes only after explicit enable or apply', async () => {
+  let current: ToolboxState = { ...initial(), selected: ['skill:design'], automation: { enabled: false, setup: false, providers: [{ name: 'Codex', state: 'unconfigured' }], sessions: 0, appliedIds: [] } }
+  const updates: boolean[] = []
+  const host = mockHost({ requests: {
+    'calls.get': calls, 'toolbox.catalog': () => catalog, 'toolbox.state': () => current,
+    'toolbox.select': input => { current = { ...current, selected: input.ids }; return current },
+    'toolbox.automation': input => {
+      updates.push(input.enabled)
+      current = { ...current, automation: { enabled: input.enabled, setup: true, providers: [{ name: 'Codex', state: 'ready' }], sessions: 1, appliedIds: [...current.selected] } }
+      return current
+    }
+  } })
+  const view = await mount(panel, { host })
+  try {
+    await view.select({ label: 'Traffic Light views' }, 'library')
+    assert.deepEqual(updates, [])
+    assert.equal(view.find({ text: 'Prepare use instructions' }), null)
+    await view.toggle({ label: 'Connect automatically in new sessions' })
+    assert.deepEqual(updates, [true])
+    await view.toggle({ label: 'figma-local' })
+    assert.deepEqual(updates, [true])
+    assert.equal(Boolean(view.find({ text: 'Selection has unapplied changes.' })), true)
+    await view.press({ text: 'Apply selection' })
+    assert.deepEqual(updates, [true, true])
+    assert.equal(view.find({ text: 'Selection has unapplied changes.' }), null)
+    assert.equal(Boolean(view.find({ text: 'Apply this selection to new supported agent sessions. Existing conversations keep their previous configuration.' })), true)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('batch sync acts only on selected syncable items and shows conflicts without claiming success', async () => {
+  const inventory: ToolboxCatalog = { items: [
+    { ...catalog.items[0], sharing: { state: 'provider', canSync: true } },
+    { ...catalog.items[1], sharing: { state: 'provider', canSync: true } },
+    { ...catalog.items[2], sharing: { state: 'conflict', canSync: false } }
+  ], warnings: [] }
+  const current: ToolboxState = { ...initial(), selected: ['skill:design', 'mcp:disabled'] }
+  let invoked: string[] = []
+  const host = mockHost({ requests: {
+    'calls.get': calls, 'toolbox.catalog': () => inventory, 'toolbox.state': () => current,
+    'toolbox.sync': input => {
+      invoked = input.ids
+      return { catalog: inventory, results: [{ id: 'skill:design', name: 'design-guide', status: 'conflict' as const, message: 'An existing shared copy was preserved.' }] }
+    }
+  } })
+  const view = await mount(panel, { host })
+  try {
+    await view.select({ label: 'Traffic Light views' }, 'library')
+    assert.deepEqual(invoked, [])
+    await view.press({ text: 'Sync selected' })
+    assert.deepEqual(invoked, ['skill:design'])
+    assert.equal(Boolean(view.find({ text: 'An existing shared copy was preserved.' })), true)
+    assert.equal(Boolean(view.find({ text: 'Conflict' })), true)
+    assert.equal(view.find({ text: 'Synced' }), null)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })

@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { open, opendir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import toml from './vendor/smol-toml.cjs'
+import { decorateSharing, inspectSkillPackage } from './shared-sync.mjs'
 
 const CONFIG_LIMIT = 2 * 1024 * 1024
 const SKILL_LIMIT = 64 * 1024
@@ -137,6 +138,7 @@ async function configServers(path, format) {
 }
 
 export async function scanCatalog({ home = homedir() } = {}) {
+  home = await realpath(home).catch(() => resolve(home))
   const items = [], warnings = [], records = new Map(), skillItems = new Map(), mcpItems = new Map()
   let inspected = 0
   const skillRoots = [
@@ -217,7 +219,7 @@ export async function scanCatalog({ home = homedir() } = {}) {
     if (Object.keys(servers).length > 300) warnings.push(`MCP inventory from ${relative} was limited to 300 entries.`)
   }
   items.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
-  return { items, warnings: [...new Set(warnings)], records }
+  return decorateSharing({ items, warnings: [...new Set(warnings)], records }, home)
 }
 
 export async function resolveRecord(record) {
@@ -226,6 +228,7 @@ export async function resolveRecord(record) {
       const path = await realpath(record.path)
       const content = await readBounded(path, SKILL_LIMIT)
       if (path !== record.path || hash(content) !== record.fingerprint) throw fail('CAPABILITY_CHANGED', 'This skill changed. Prepare the selection again.')
+      if (record.packageRoot && (await inspectSkillPackage(record.packageRoot, true)).fingerprint !== record.packageFingerprint) throw fail('CAPABILITY_CHANGED', 'This skill package changed. Prepare the selection again.')
       return { path }
     } catch (error) { if (error.code === 'CAPABILITY_CHANGED') throw error; throw fail('CAPABILITY_UNAVAILABLE', 'This skill is no longer readable.') }
   }

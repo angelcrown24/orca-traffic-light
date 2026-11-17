@@ -78,7 +78,7 @@ async function changeNative(enabled: boolean): Promise<void> {
 }
 export function setup(ctx: PanelContext): void {
   isPanelVisible = () => read(ctx.visible) && read(tab) === 'activity'
-  setupToolbox(ctx, () => read(tab) === 'library')
+  setupToolbox(ctx, () => read(tab) === 'library' || read(tab) === 'structure')
   ctx.subscriptions.push({ dispose: () => { isPanelVisible = () => false } })
   ctx.subscriptions.push(plugin.on('calls.changed', () => { void refresh() }))
   ctx.subscriptions.push(on('workspace.changed', () => { set(calls, []); set(terminalResources, []); set(terminalActiveResources, []); nativeRequestId++; set(nativeActivities, []); set(nativeResources, []); set(nativeActiveResources, []); set(journalStatus, undefined); void refresh(); void refreshNative() }))
@@ -227,7 +227,7 @@ export default function Panel() {
     <Heading>Traffic Light</Heading>
     <Tabs label={ko ? 'Traffic Light 보기' : 'Traffic Light views'} value={read(tab)} onChange={async value => {
       set(tab, value)
-      if (value === 'library') await openToolbox()
+      if (value === 'library' || value === 'structure') await openToolbox()
       if (value === 'activity') { await refresh(); await refreshNative() }
     }}>
       <Tab value="activity" label={ko ? '활동' : 'Activity'} icon="activity"><ActivityPanel /></Tab>

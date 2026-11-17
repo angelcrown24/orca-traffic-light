@@ -32,7 +32,9 @@ export default function activate(orca: OrcaWorkerApi): void {
     getWorkspaces: () => orca.host.call('workspace.list'),
     post: () => orca.panels.post('toolbox.changed', {}),
     loadSelection: id => orca.storage.get(`toolbox-selection:${id}`),
-    saveSelection: (id, ids) => orca.storage.set(`toolbox-selection:${id}`, ids)
+    saveSelection: (id, ids) => orca.storage.set(`toolbox-selection:${id}`, ids),
+    loadAutomation: () => orca.storage.get('toolbox-automation'),
+    saveAutomation: entries => orca.storage.set('toolbox-automation', entries)
   })
   toolboxManagers.add(toolbox)
   orca.panels.handle('toolbox.catalog', toolbox.catalog)
@@ -41,6 +43,9 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('toolbox.prepare', toolbox.prepare)
   orca.panels.handle('toolbox.revoke', toolbox.revoke)
   orca.panels.handle('toolbox.copy', toolbox.copy)
+  orca.panels.handle('toolbox.automation', toolbox.setAutomation)
+  orca.panels.handle('toolbox.sync', toolbox.sync)
+  void toolbox.initialize()
   const terminals = new Map<string, Map<string, ObservedCall>>()
   let order = 0
 
