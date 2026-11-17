@@ -73,7 +73,7 @@ test('does not request native activity while the panel is hidden', async () => {
 })
 
 
-test('shows observed resource names and marks inferred references accurately', async () => {
+test('shows detected resource names and explains the detection source', async () => {
   const host = mockHost({ requests: { 'calls.get': () => ({ workspace: true, calls: [], resources: [
     { category: 'skill', name: 'ui-ux-pro-max', evidence: 'inferred' },
     { category: 'mcp', name: 'figma-local', evidence: 'observed' }
@@ -82,13 +82,12 @@ test('shows observed resource names and marks inferred references accurately', a
   try {
     assert.equal(Boolean(view.find({ text: 'ui-ux-pro-max' })), true)
     assert.equal(Boolean(view.find({ text: 'figma-local' })), true)
-    assert.equal(Boolean(view.find({ text: 'Referenced' })), true)
-    assert.equal(Boolean(view.find({ text: 'Direct' })), true)
+    assert.equal(Boolean(view.find({ text: 'Names found in tool calls and skill file paths.' })), true)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })
 
-test('merges native and terminal resources without falsely upgrading evidence', async () => {
+test('shows both native and terminal resource names', async () => {
   const host = mockHost({ settings: { nativeActivity: true }, requests: {
     'calls.get': () => ({ workspace: true, calls: [], resources: [{ category: 'skill', name: 'ux', evidence: 'inferred' }] }),
     'native.get': () => ({ status: 'ready', activities: [], resources: [{ category: 'plugin', name: 'example', evidence: 'observed' }] })
@@ -97,8 +96,6 @@ test('merges native and terminal resources without falsely upgrading evidence', 
   try {
     assert.equal(Boolean(view.find({ text: 'ux' })), true)
     assert.equal(Boolean(view.find({ text: 'example' })), true)
-    assert.equal(Boolean(view.find({ text: 'Referenced' })), true)
-    assert.equal(Boolean(view.find({ text: 'Direct' })), true)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })
@@ -112,7 +109,7 @@ test('shows Korean labels and privacy disclosure beside the switch', async () =>
   try {
     assert.equal(Boolean(view.find({ text: '감지된 항목' })), true)
     assert.equal(Boolean(view.find({ text: '스킬' })), true)
-    assert.equal(Boolean(view.find({ text: '참조 추정' })), true)
+    assert.equal(Boolean(view.find({ text: '도구 호출과 스킬 파일 경로에서 찾은 이름입니다.' })), true)
     await view.toggle({ label: '설정 및 개인정보' })
     assert.equal(Boolean(view.find({ label: '채팅 활동 표시' })), true)
     assert.equal(Boolean(view.find({ text: '켜면 모든 작업공간의 상태에 포함된 프롬프트·도구 입력·응답을 읽습니다. macOS에서는 현재 작업공간의 최근 도구 입력도 읽습니다.' })), true)

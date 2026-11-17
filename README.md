@@ -4,7 +4,7 @@ An Orca sidebar showing observed skill, plugin, MCP and tool activity from agent
 
 ## What it shows
 
-The panel lists skill, plugin and MCP names identified from tool calls. **Observed** means a named skill or MCP call was present; **Inferred** means a skill or plugin path was referenced, which does not prove execution. The list is incomplete and an absent name does not imply it was unused.
+The panel lists skill, plugin and MCP names found in tool calls and skill file paths. A path reference alone does not prove execution. The list is incomplete and an absent name does not imply it was unused.
 
 
 The panel shows the focused workspace's tool names and agent names, marked **Awaiting finish** when a start event was observed and **Finished** when a matching end event arrived. Finished does not indicate success. If an end event is lost, a call can remain pending. When a call ID is absent, an end is matched only if exactly one pending call for the same terminal, agent and tool fits; this is an inference, not proof. Ambiguous or unpaired events are marked **Uncertain**. Orca must supply a terminal identifier; without it, an event is omitted to avoid exposing another workspace's calls. Calls are filtered to terminals currently listed in the focused workspace, so calls from a closed terminal no longer appear. Up to 100 calls per terminal and 100 recently active terminals are held in memory, and are cleared when the worker restarts. Older calls may be evicted.

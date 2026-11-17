@@ -81,9 +81,9 @@ export function setup(ctx: PanelContext): void {
 const labels = {
   en: {
     summary: 'Activity in this workspace', chatOn: 'Chat monitoring on', chatOff: 'Chat monitoring off', chatError: 'Chat activity unavailable',
-    detected: 'Detected items', detectedHelp: 'Names found in activity; a reference does not prove execution.',
+    detected: 'Detected items', detectedHelp: 'Names found in tool calls and skill file paths.',
     skill: 'Skills', plugin: 'Plugins', mcp: 'MCP servers', none: 'No items detected yet',
-    empty: 'An empty list does not mean an item was unused.', direct: 'Direct', inferred: 'Referenced',
+    empty: 'An empty list does not mean an item was unused.',
     agent: 'Agent activity', agentNone: 'No agent activity reported.', agentOff: 'Turn on chat activity in settings to see agent status.', unavailable: 'Could not load chat activity.',
     truncated: 'Only recent chat history is shown.', historyUnavailable: 'Recent chat history is unavailable.',
     toolCalls: 'Recent tool calls', toolHelp: 'Local terminal calls observed since the plugin started.',
@@ -99,9 +99,9 @@ const labels = {
   },
   ko: {
     summary: '현재 작업공간 활동', chatOn: '채팅 활동 켜짐', chatOff: '채팅 활동 꺼짐', chatError: '채팅 활동 오류',
-    detected: '감지된 항목', detectedHelp: '활동에서 발견한 이름입니다. 참조가 실제 실행을 뜻하지는 않습니다.',
+    detected: '감지된 항목', detectedHelp: '도구 호출과 스킬 파일 경로에서 찾은 이름입니다.',
     skill: '스킬', plugin: '플러그인', mcp: 'MCP 서버', none: '감지된 항목 없음',
-    empty: '목록에 없어도 설치했거나 사용했을 수 있습니다.', direct: '직접 감지', inferred: '참조 추정',
+    empty: '목록에 없어도 설치했거나 사용했을 수 있습니다.',
     agent: '에이전트 활동', agentNone: '보고된 에이전트 활동이 없습니다.', agentOff: '설정에서 채팅 활동을 켜면 상태를 볼 수 있습니다.', unavailable: '채팅 활동을 불러오지 못했습니다.',
     truncated: '최근 채팅 기록 일부만 표시합니다.', historyUnavailable: '최근 채팅 기록을 불러올 수 없습니다.',
     toolCalls: '최근 도구 호출', toolHelp: '플러그인 실행 중 관측한 로컬 터미널 호출입니다.',
@@ -153,10 +153,7 @@ export default function Panel() {
               <Text size="xs" muted>{String(found.length)}</Text>
             </Row>
             {found.length === 0 ? <Text muted size="xs">{t.none}</Text> : found.map((resource) =>
-              <Row key={`${resource.category}:${resource.name}`} justify="between" align="center" gap="sm" wrap>
-                <Box minWidth={0} grow><Text size="sm" truncate>{resource.name}</Text></Box>
-                <Badge>{resource.evidence === 'observed' ? t.direct : t.inferred}</Badge>
-              </Row>)}
+              <Box key={`${resource.category}:${resource.name}`} minWidth={0}><Text size="sm" truncate>{resource.name}</Text></Box>)}
           </Stack>
         })}
       </Box>
