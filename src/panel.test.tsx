@@ -82,7 +82,7 @@ test('shows detected resource names and explains the detection source', async ()
   try {
     assert.equal(Boolean(view.find({ text: 'ui-ux-pro-max' })), true)
     assert.equal(Boolean(view.find({ text: 'figma-local' })), true)
-    assert.equal(Boolean(view.find({ text: 'Names found in tool calls and skill file paths.' })), true)
+    assert.equal(Boolean(view.find({ text: 'Names found in tool calls and skill file paths. In use marks activity detected during an ongoing agent turn.' })), true)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })
@@ -100,6 +100,46 @@ test('shows both native and terminal resource names', async () => {
   } finally { await view.unmount() }
 })
 
+test('marks only active resources and clears the badge when a call ends', async () => {
+  let active = true
+  const current = { category: 'skill', name: 'ui-ux-pro-max', evidence: 'inferred' } as const
+  const host = mockHost({ requests: {
+    'calls.get': () => ({
+      workspace: true, calls: [],
+      resources: [current, { category: 'skill' as const, name: 'earlier-skill', evidence: 'observed' as const }],
+      activeResources: active ? [current] : []
+    })
+  } })
+  const view = await mount(panel, { host })
+  try {
+    assert.equal(Boolean(view.find({ text: 'ui-ux-pro-max' })), true)
+    assert.equal(Boolean(view.find({ text: 'earlier-skill' })), true)
+    assert.equal(Boolean(view.find({ text: 'In use' })), true)
+    active = false
+    await view.post('calls.changed', {})
+    assert.equal(view.find({ text: 'In use' }), null)
+    assert.equal(Boolean(view.find({ text: 'ui-ux-pro-max' })), true)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('merges native activity across sources and clears it on opt-out', async () => {
+  const host = mockHost({ settings: { nativeActivity: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [], resources: [{ category: 'skill', name: 'ui-ux-pro-max', evidence: 'observed' }], activeResources: [] }),
+    'native.get': () => ({ status: 'ready', activities: [], resources: [], activeResources: [{ category: 'skill', name: 'ui-ux-pro-max', evidence: 'inferred' }] })
+  } })
+  const view = await mount(panel, { host, locale: 'ko-KR' })
+  try {
+    assert.equal(Boolean(view.find({ text: 'ui-ux-pro-max' })), true)
+    assert.equal(Boolean(view.find({ text: '현재 사용 중' })), true)
+    await view.toggle({ label: '설정 및 개인정보' })
+    await view.toggle({ label: '채팅 활동 표시' })
+    assert.equal(view.find({ text: '현재 사용 중' }), null)
+    assert.equal(Boolean(view.find({ text: 'ui-ux-pro-max' })), true)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
 
 test('shows Korean labels and privacy disclosure beside the switch', async () => {
   const host = mockHost({ settings: { nativeActivity: false }, requests: {
@@ -109,7 +149,7 @@ test('shows Korean labels and privacy disclosure beside the switch', async () =>
   try {
     assert.equal(Boolean(view.find({ text: '감지된 항목' })), true)
     assert.equal(Boolean(view.find({ text: '스킬' })), true)
-    assert.equal(Boolean(view.find({ text: '도구 호출과 스킬 파일 경로에서 찾은 이름입니다.' })), true)
+    assert.equal(Boolean(view.find({ text: '도구 호출과 스킬 파일 경로에서 찾은 이름입니다. 현재 사용 중은 진행 중인 에이전트 작업에서 감지된 항목입니다.' })), true)
     await view.toggle({ label: '설정 및 개인정보' })
     assert.equal(Boolean(view.find({ label: '채팅 활동 표시' })), true)
     assert.equal(Boolean(view.find({ text: '켜면 모든 작업공간의 상태에 포함된 프롬프트·도구 입력·응답을 읽습니다. macOS에서는 현재 작업공간의 최근 도구 입력도 읽습니다.' })), true)

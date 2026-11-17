@@ -11,6 +11,8 @@ test('journal query validates session ID and requests no message or output field
   assert.equal(sql.includes("'$.body.output'"), false)
   assert.equal(sql.includes("'$.body.input'"), true)
   assert.equal(sql.includes('epoch=(SELECT epoch FROM current)'), true)
+  assert.equal(sql.includes("lifecycle_state FROM latest_turn)='running'"), true)
+  assert.equal(sql.includes('turn_item_id=(SELECT item_id FROM latest_turn)'), true)
 })
 
 test('returns resource names only and deduplicates them', async () => {
@@ -19,12 +21,25 @@ test('returns resource names only and deduplicates them', async () => {
     { kind: 'call', name: 'shell', input: 'cat /Users/me/.codex/skills/ui-ux-pro-max/SKILL.md' },
     { kind: 'call', name: 'mcp__figma__read', input: 'sensitive' },
   ])
-  assert.deepEqual(result, { status: 'ready', resources: [
+  assert.deepEqual(result, { status: 'ready', activeResources: [], resources: [
     { category: 'skill', name: 'ui-ux-pro-max', evidence: 'inferred' },
     { category: 'mcp', name: 'figma', evidence: 'observed' },
   ] })
   assert.equal(JSON.stringify(result).includes('secret'), false)
   assert.equal(JSON.stringify(result).includes('sensitive'), false)
+})
+
+test('marks only tool calls belonging to the running root turn as active', async () => {
+  const result = await readJournalActivity(id, async () => [meta,
+    { kind: 'call', name: 'shell', input: 'cat /tmp/skills/current/SKILL.md', active: 1 },
+    { kind: 'call', name: 'shell', input: 'cat /tmp/skills/old/SKILL.md', active: 0 },
+  ])
+  assert.deepEqual(result.activeResources, [{ category: 'skill', name: 'current', evidence: 'inferred' }])
+  assert.equal(result.resources.length, 2)
+  const noTurn = await readJournalActivity(id, async () => [meta,
+    { kind: 'call', name: 'shell', input: 'cat /tmp/skills/current/SKILL.md', active: 0 },
+  ])
+  assert.deepEqual(noTurn.activeResources, [])
 })
 
 test('fails closed for old or malformed schemas and runtime errors', async () => {

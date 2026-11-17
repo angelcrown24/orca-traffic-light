@@ -5,7 +5,7 @@ export {}
 declare module 'orca' {
   interface PluginRequests {
     'native.get': { output: NativeResult }
-    'calls.get': { output: { calls: Call[]; workspace: boolean; resources?: ResourceObservation[] } }
+    'calls.get': { output: { calls: Call[]; workspace: boolean; resources?: ResourceObservation[]; activeResources?: ResourceObservation[] } }
   }
   interface PluginPanelEvents {
     'calls.changed': Record<string, never>

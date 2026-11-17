@@ -22,7 +22,7 @@ test('native reader shares concurrent reads, filters workspace and discards on o
   release({ result: { worktrees: [{ address: { worktree: 'identity:one' }, agents: [{ agentType: 'codex', state: 'working', toolName: 'Read', prompt: 'private' }] }] } })
   const results = await Promise.all([a, b])
   assert.equal(fetches, 1)
-  assert.deepEqual(results[0], { status: 'ready', activities: [{ agentType: 'codex', state: 'working', toolName: 'Read' }], resources: [] })
+  assert.deepEqual(results[0], { status: 'ready', activities: [{ agentType: 'codex', state: 'working', toolName: 'Read' }], resources: [], activeResources: [] })
   assert.equal(JSON.stringify(results).includes('private'), false)
   const c = read()
   await Promise.resolve()
@@ -126,4 +126,23 @@ test('discards journal results if workspace changes while reading', async () => 
     return { status: 'ready', resources: [{ category: 'skill', name: 'private', evidence: 'inferred' }] }
   })
   assert.deepEqual(await read(), { status: 'disabled', activities: [], resources: [] })
+})
+
+test('active resources follow the working agent turn and clear after it finishes', async () => {
+  const id = 'codex_12345678_abcd_1234_abcd_123456789abc'
+  const otherId = 'codex_87654321_abcd_1234_abcd_123456789abc'
+  let state = 'working'
+  const snapshot = () => ({ result: { worktrees: [{ hostId: 'local', address: { worktree: 'identity:one' }, agents: [
+    { structuredHostOwned: true, paneKey: `structured-agent-session-${id}:pane`, state, toolName: 'shell', toolInput: 'cat /tmp/skills/current/SKILL.md' },
+    { structuredHostOwned: true, paneKey: `structured-agent-session-${otherId}:pane`, state: 'done', toolName: 'mcp__stale__run' }
+  ] }] } })
+  const resource = { category: 'skill' as const, name: 'current', evidence: 'inferred' as const }
+  const read = createNativeReader(async () => true, async () => 'identity:one', async () => snapshot(), async (sid) => ({
+    status: 'ready', resources: [resource], activeResources: sid === id ? [resource] : [{ category: 'mcp', name: 'stale', evidence: 'observed' }]
+  }))
+  assert.deepEqual((await read()).activeResources, [resource])
+  state = 'done'
+  const finished = await read()
+  assert.deepEqual(finished.activeResources, [])
+  assert.equal(finished.resources.some((item) => item.name === 'current'), true)
 })

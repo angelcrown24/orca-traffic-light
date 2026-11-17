@@ -6,6 +6,8 @@ import type { ResourceObservation } from './resource-classifier'
 const calls = atom<Call[]>([])
 const terminalResources = atom<ResourceObservation[]>([])
 const nativeResources = atom<ResourceObservation[]>([])
+const terminalActiveResources = atom<ResourceObservation[]>([])
+const nativeActiveResources = atom<ResourceObservation[]>([])
 const workspace = atom(false)
 const loading = atom(true)
 const failed = atom(false)
@@ -23,19 +25,21 @@ async function refresh(): Promise<void> {
     if (id !== requestId) return
     set(calls, result.calls)
     set(terminalResources, result.resources ?? [])
+    set(terminalActiveResources, result.activeResources ?? [])
     set(workspace, result.workspace)
     set(failed, false)
   } catch {
     if (id !== requestId) return
     set(calls, [])
     set(terminalResources, [])
+    set(terminalActiveResources, [])
     set(workspace, false)
     set(failed, true)
   } finally { if (id === requestId) set(loading, false) }
 }
 async function readNativeSetting(): Promise<void> {
   try { set(nativeEnabled, (await settings.get('nativeActivity')) === true) }
-  catch { set(nativeEnabled, false); set(nativeStatus, 'unavailable') }
+  catch { set(nativeEnabled, false); set(nativeActiveResources, []); set(nativeStatus, 'unavailable') }
 }
 async function refreshNative(): Promise<void> {
   if (!read(nativeEnabled) || !isPanelVisible()) return
@@ -47,10 +51,12 @@ async function refreshNative(): Promise<void> {
     set(journalStatus, result.journalStatus)
     set(nativeActivities, result.activities)
     set(nativeResources, result.resources ?? [])
+    set(nativeActiveResources, result.status === 'ready' ? result.activeResources ?? [] : [])
   } catch {
     if (id !== nativeRequestId) return
     set(nativeActivities, [])
     set(nativeResources, [])
+    set(nativeActiveResources, [])
     set(journalStatus, undefined)
     set(nativeStatus, 'unavailable')
   }
@@ -62,18 +68,19 @@ async function changeNative(enabled: boolean): Promise<void> {
     nativeRequestId++
     set(nativeActivities, [])
     set(nativeResources, [])
+    set(nativeActiveResources, [])
     set(journalStatus, undefined)
     set(nativeStatus, 'disabled')
     if (enabled) await refreshNative()
-  } catch { set(nativeEnabled, false); set(nativeStatus, 'unavailable') }
+  } catch { set(nativeEnabled, false); set(nativeActiveResources, []); set(nativeStatus, 'unavailable') }
 }
 export function setup(ctx: PanelContext): void {
   isPanelVisible = () => read(ctx.visible)
   ctx.subscriptions.push({ dispose: () => { isPanelVisible = () => false } })
   ctx.subscriptions.push(plugin.on('calls.changed', () => { void refresh() }))
-  ctx.subscriptions.push(on('workspace.changed', () => { set(calls, []); set(terminalResources, []); nativeRequestId++; set(nativeActivities, []); set(nativeResources, []); set(journalStatus, undefined); void refresh(); void refreshNative() }))
-  ctx.subscriptions.push(settings.onDidChange(() => { void readNativeSetting().then(() => { if (!read(nativeEnabled)) { nativeRequestId++; set(nativeActivities, []); set(nativeResources, []); set(journalStatus, undefined); set(nativeStatus, 'disabled') } }) }))
-  const timer = setInterval(() => { if (read(ctx.visible)) void refreshNative() }, 3000)
+  ctx.subscriptions.push(on('workspace.changed', () => { set(calls, []); set(terminalResources, []); set(terminalActiveResources, []); nativeRequestId++; set(nativeActivities, []); set(nativeResources, []); set(nativeActiveResources, []); set(journalStatus, undefined); void refresh(); void refreshNative() }))
+  ctx.subscriptions.push(settings.onDidChange(() => { void readNativeSetting().then(() => { if (!read(nativeEnabled)) { nativeRequestId++; set(nativeActivities, []); set(nativeResources, []); set(nativeActiveResources, []); set(journalStatus, undefined); set(nativeStatus, 'disabled') } }) }))
+  const timer = setInterval(() => { if (read(ctx.visible)) { void refresh(); void refreshNative() } }, 3000)
   ctx.subscriptions.push({ dispose: () => clearInterval(timer) })
   void readNativeSetting().then(() => { if (read(nativeEnabled)) void refreshNative() })
   void refresh()
@@ -81,9 +88,9 @@ export function setup(ctx: PanelContext): void {
 const labels = {
   en: {
     summary: 'Activity in this workspace', chatOn: 'Chat monitoring on', chatOff: 'Chat monitoring off', chatError: 'Chat activity unavailable',
-    detected: 'Detected items', detectedHelp: 'Names found in tool calls and skill file paths.',
+    detected: 'Detected items', detectedHelp: 'Names found in tool calls and skill file paths. In use marks activity detected during an ongoing agent turn.',
     skill: 'Skills', plugin: 'Plugins', mcp: 'MCP servers', none: 'No items detected yet',
-    empty: 'An empty list does not mean an item was unused.',
+    empty: 'An empty list does not mean an item was unused.', inUse: 'In use',
     agent: 'Agent activity', agentNone: 'No agent activity reported.', agentOff: 'Turn on chat activity in settings to see agent status.', unavailable: 'Could not load chat activity.',
     truncated: 'Only recent chat history is shown.', historyUnavailable: 'Recent chat history is unavailable.',
     toolCalls: 'Recent tool calls', toolHelp: 'Local terminal calls observed since the plugin started.',
@@ -99,9 +106,9 @@ const labels = {
   },
   ko: {
     summary: '현재 작업공간 활동', chatOn: '채팅 활동 켜짐', chatOff: '채팅 활동 꺼짐', chatError: '채팅 활동 오류',
-    detected: '감지된 항목', detectedHelp: '도구 호출과 스킬 파일 경로에서 찾은 이름입니다.',
+    detected: '감지된 항목', detectedHelp: '도구 호출과 스킬 파일 경로에서 찾은 이름입니다. 현재 사용 중은 진행 중인 에이전트 작업에서 감지된 항목입니다.',
     skill: '스킬', plugin: '플러그인', mcp: 'MCP 서버', none: '감지된 항목 없음',
-    empty: '목록에 없어도 설치했거나 사용했을 수 있습니다.',
+    empty: '목록에 없어도 설치했거나 사용했을 수 있습니다.', inUse: '현재 사용 중',
     agent: '에이전트 활동', agentNone: '보고된 에이전트 활동이 없습니다.', agentOff: '설정에서 채팅 활동을 켜면 상태를 볼 수 있습니다.', unavailable: '채팅 활동을 불러오지 못했습니다.',
     truncated: '최근 채팅 기록 일부만 표시합니다.', historyUnavailable: '최근 채팅 기록을 불러올 수 없습니다.',
     toolCalls: '최근 도구 호출', toolHelp: '플러그인 실행 중 관측한 로컬 터미널 호출입니다.',
@@ -121,9 +128,13 @@ export default function Panel() {
   const t = env.locale.toLowerCase().startsWith('ko') ? labels.ko : labels.en
   const items = read(calls)
   const resources = new Map<string, ResourceObservation>()
-  for (const item of [...read(terminalResources), ...read(nativeResources)]) {
+  const activeResources = [...read(terminalActiveResources), ...read(nativeActiveResources)]
+  const activeKeys = new Set(activeResources.map((item) => `${item.category}:${item.name}`))
+  for (const item of [...read(terminalResources), ...read(nativeResources), ...activeResources]) {
     const key = `${item.category}:${item.name}`
-    if (!resources.has(key) || item.evidence === 'observed') resources.set(key, item)
+    const previous = resources.get(key)
+    if (!previous) resources.set(key, item)
+    else if (item.evidence === 'observed') resources.set(key, item)
   }
   const grouped = [
     { category: 'skill', title: t.skill },
@@ -153,7 +164,10 @@ export default function Panel() {
               <Text size="xs" muted>{String(found.length)}</Text>
             </Row>
             {found.length === 0 ? <Text muted size="xs">{t.none}</Text> : found.map((resource) =>
-              <Box key={`${resource.category}:${resource.name}`} minWidth={0}><Text size="sm" truncate>{resource.name}</Text></Box>)}
+              <Row key={`${resource.category}:${resource.name}`} align="center" justify="between" gap="sm" wrap>
+                <Box minWidth={0} grow><Text size="sm" truncate>{resource.name}</Text></Box>
+                {activeKeys.has(`${resource.category}:${resource.name}`) ? <Badge tone="accent">{t.inUse}</Badge> : null}
+              </Row>)}
           </Stack>
         })}
       </Box>

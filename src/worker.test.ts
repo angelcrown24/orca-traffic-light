@@ -71,3 +71,38 @@ test('classifies observed terminal resources without retaining inputs or mixing 
   assert.deepEqual((await worker.request('calls.get')).resources, [{ category: 'mcp', name: 'secret_server', evidence: 'observed' }])
   await worker.deactivate()
 })
+
+test('active terminal resources clear on completion and do not leak across workspaces', async () => {
+  const context = { branch: '', displayName: '', terminals: [{ id: 't1' }] }
+  const host = mockHost({ results: { 'workspace.readContext': context } })
+  const worker = await mountWorker(main, { host })
+  const event = { agent: 'codex', workspaceId: null, terminalId: 't1', callId: '1', tool: 'shell', input: { cmd: 'cat /tmp/skills/current/SKILL.md' } }
+  const other = { ...event, terminalId: 't2', tool: 'mcp__other__run' }
+  try {
+    await worker.hooks.fire('agent.tool.before', event)
+    await worker.hooks.fire('agent.tool.before', other)
+    assert.deepEqual((await worker.request('calls.get')).activeResources, [{ category: 'skill', name: 'current', evidence: 'inferred' }])
+    await worker.hooks.fire('agent.tool.after', event)
+    const completed = await worker.request('calls.get')
+    assert.deepEqual(completed.activeResources, [])
+    assert.equal(completed.resources?.length, 1)
+    host.respond('workspace.readContext', { ...context, terminals: [{ id: 't2' }] })
+    assert.deepEqual((await worker.request('calls.get')).activeResources, [{ category: 'mcp', name: 'other', evidence: 'observed' }])
+  } finally { await worker.deactivate() }
+})
+
+test('active terminal badges expire if the completion event is missing', async () => {
+  const originalNow = Date.now
+  let now = 1000
+  Date.now = () => now
+  const host = mockHost({ results: { 'workspace.readContext': { branch: '', displayName: '', terminals: [{ id: 't1' }] } } })
+  const worker = await mountWorker(main, { host })
+  try {
+    await worker.hooks.fire('agent.tool.before', { agent: 'codex', workspaceId: null, terminalId: 't1', tool: 'mcp__example__run', input: null })
+    assert.equal((await worker.request('calls.get')).activeResources?.length, 1)
+    now += 5 * 60_000 + 1
+    const expired = await worker.request('calls.get')
+    assert.equal(expired.activeResources?.length, 0)
+    assert.equal(expired.resources?.length, 1)
+  } finally { Date.now = originalNow; await worker.deactivate() }
+})

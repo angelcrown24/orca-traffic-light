@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process'
-import { parseNativeActivity, parseNativeResources, nativeSessionIds, type NativeActivity } from './native-activity'
+import { parseNativeActivity, parseNativeResources, parseNativeActiveResources, nativeSessionIds, nativeWorkingSessionIds, type NativeActivity } from './native-activity'
 import type { ResourceObservation } from './resource-classifier'
 import { readJournalActivity, type JournalResult } from './journal-activity'
 
-export type NativeResult = { status: 'disabled' | 'ready' | 'unavailable'; activities: NativeActivity[]; resources: ResourceObservation[]; journalStatus?: JournalResult['status'] }
+export type NativeResult = { status: 'disabled' | 'ready' | 'unavailable'; activities: NativeActivity[]; resources: ResourceObservation[]; activeResources?: ResourceObservation[]; journalStatus?: JournalResult['status'] }
 type FetchSnapshot = () => Promise<unknown>
 type GetEnabled = () => Promise<boolean>
 type GetWorkspace = () => Promise<string | null>
@@ -68,13 +68,24 @@ export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace,
         const journalStatus: JournalResult['status'] | undefined = sessions.ids.length === 0 ? undefined
           : journals.some((x) => x.status === 'unavailable') ? 'unavailable'
           : sessions.truncated || journals.some((x) => x.status === 'truncated') ? 'truncated' : 'ready'
+        const workingSessions = nativeWorkingSessionIds(snapshot, id)
+        const active = new Map<string, ResourceObservation>()
+        const currentResources = parseNativeActiveResources(snapshot, id)
+        for (let i = 0; i < journals.length; i++) {
+          if (workingSessions.has(sessions.ids[i])) currentResources.push(...(journals[i].activeResources ?? []))
+        }
+        for (const resource of currentResources) {
+          const key = `${resource.category}:${resource.name}`
+          const previous = active.get(key)
+          if (!previous || resource.evidence === 'observed') active.set(key, resource)
+        }
         for (const resource of [...parseNativeResources(snapshot, id), ...journals.flatMap((x) => x.resources)]) {
           const key = `${resource.category}:${resource.name}`
           const previous = observed.get(key)
           if (!previous || resource.evidence === 'observed') observed.set(key, resource)
         }
         while (observed.size > 100) observed.delete(observed.keys().next().value!)
-        return { status: 'ready', activities: parseNativeActivity(snapshot, id), resources: [...observed.values()], ...(journalStatus ? { journalStatus } : {}) }
+        return { status: 'ready', activities: parseNativeActivity(snapshot, id), resources: [...observed.values()], activeResources: [...active.values()].slice(-100), ...(journalStatus ? { journalStatus } : {}) }
       } catch { return empty('unavailable') }
     })()
     try { return await inFlight } finally { inFlight = null }

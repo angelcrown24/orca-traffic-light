@@ -66,6 +66,19 @@ export function parseNativeResources(response: unknown, workspaceId: string): Re
   return resources
 }
 
+/** Classify only a currently working agent's reported tool, never a stale finished tool. */
+export function parseNativeActiveResources(response: unknown, workspaceId: string): ResourceObservation[] {
+  const row = workspaceRow(response, workspaceId)
+  if (!row || !Array.isArray(row.agents)) return []
+  const resources: ResourceObservation[] = []
+  for (const value of row.agents) {
+    const agent = object(value)
+    if (agent?.state !== 'working' || typeof agent.toolName !== 'string') continue
+    resources.push(...classifyResources(agent.toolName, agent.toolInput))
+  }
+  return resources
+}
+
 /** Only local structured sessions in the exact current workspace are eligible for local journal access. */
 export function nativeSessionIds(response: unknown, workspaceId: string): { ids: string[]; truncated: boolean } {
   const row = workspaceRow(response, workspaceId)
@@ -79,4 +92,19 @@ export function nativeSessionIds(response: unknown, workspaceId: string): { ids:
   }
   const all = [...ids]
   return { ids: all.slice(0, 4), truncated: all.length > 4 }
+}
+
+/** Working sessions must also belong to the exact current workspace and host. */
+export function nativeWorkingSessionIds(response: unknown, workspaceId: string): Set<string> {
+  const row = workspaceRow(response, workspaceId)
+  if (!row || row.hostId !== 'local' || !Array.isArray(row.agents)) return new Set()
+  const eligible = new Set(nativeSessionIds(response, workspaceId).ids)
+  const working = new Set<string>()
+  for (const value of row.agents) {
+    const agent = object(value)
+    if (agent?.state !== 'working' || agent.structuredHostOwned !== true || typeof agent.paneKey !== 'string') continue
+    const match = /^structured-agent-session-([^:]+):[^:]+$/.exec(agent.paneKey)
+    if (match && eligible.has(match[1])) working.add(match[1])
+  }
+  return working
 }

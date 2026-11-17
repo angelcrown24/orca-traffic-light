@@ -4,8 +4,10 @@ import { createNativeReader, fetchSnapshot } from './native-reader'
 import { classifyResources, type ResourceObservation } from './resource-classifier'
 
 // Identifiers are used only to pair events. Inputs and outputs are never retained.
-type ObservedCall = { call: Call; order: number; callId?: string; resources: ResourceObservation[] }
+type ObservedCall = { call: Call; order: number; callId?: string; resources: ResourceObservation[]; startedAt: number }
 const LIMIT = 100
+// A missing completion hook must not leave a "currently active" badge indefinitely.
+const ACTIVE_MAX_AGE_MS = 5 * 60_000
 
 function mergeResources(items: ResourceObservation[]): ResourceObservation[] {
   const unique = new Map<string, ResourceObservation>()
@@ -35,7 +37,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const key = event.callId ? `id:${event.callId}` : `anonymous:${index}`
     const id = JSON.stringify([event.terminalId, key])
     calls.delete(key)
-    calls.set(key, { call: { id, tool: event.tool, agent: event.agent, state: 'running' }, order: index, callId: event.callId, resources: classifyResources(event.tool, event.input) })
+    calls.set(key, { call: { id, tool: event.tool, agent: event.agent, state: 'running' }, order: index, callId: event.callId, resources: classifyResources(event.tool, event.input), startedAt: Date.now() })
     while (calls.size > LIMIT) calls.delete(calls.keys().next().value!)
     orca.panels.post('calls.changed', {})
   })
@@ -64,7 +66,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       // We saw an end but cannot identify its start. Keep it visible without claiming success.
       const index = ++order
       const key = `unpaired:${index}`
-      calls.set(key, { call: { id: JSON.stringify([event.terminalId, key]), tool: event.tool, agent: event.agent, state: 'uncertain' }, order: index, resources: classifyResources(event.tool, event.input) })
+      calls.set(key, { call: { id: JSON.stringify([event.terminalId, key]), tool: event.tool, agent: event.agent, state: 'uncertain' }, order: index, resources: classifyResources(event.tool, event.input), startedAt: Date.now() })
     }
     while (calls.size > LIMIT) calls.delete(calls.keys().next().value!)
     orca.panels.post('calls.changed', {})
@@ -80,6 +82,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     const context = await orca.host.call('workspace.readContext')
     const calls = context?.terminals.flatMap(({ id }) => [...(terminals.get(id)?.values() ?? [])]) ?? []
     calls.sort((a, b) => b.order - a.order)
-    return { workspace: Boolean(context), calls: calls.map(({ call }) => call), resources: mergeResources(calls.flatMap(({ resources }) => resources)) }
+    const now = Date.now()
+    return { workspace: Boolean(context), calls: calls.map(({ call }) => call), resources: mergeResources(calls.flatMap(({ resources }) => resources)),
+      activeResources: mergeResources(calls.filter(({ call, startedAt }) => call.state === 'running' && now >= startedAt && now - startedAt <= ACTIVE_MAX_AGE_MS).flatMap(({ resources }) => resources)) }
   })
 }
