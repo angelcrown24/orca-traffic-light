@@ -7,8 +7,12 @@ export type CatalogItem = {
   source: string
   available: boolean
   reason?: string
+  skillRequirements?: string
   sharing?: { state: 'provider' | 'shared' | 'update' | 'conflict'; canSync: boolean; detail?: string }
 }
+export type CompareField = 'transport' | 'command' | 'arguments' | 'environment' | 'workingDirectory' | 'endpoint' | 'authentication' | 'timeouts' | 'files' | 'contents' | 'permissions'
+export type SourceComparison = { id: string; variant: number | null; transport?: 'stdio' | 'http'; commandHint?: string; argumentCount?: number; envCount?: number; headerCount?: number; fileCount?: number }
+export type ToolboxComparison = { sources: SourceComparison[]; differences: CompareField[] }
 export type ToolboxCatalog = { items: CatalogItem[]; warnings: string[] }
 export type ToolboxBundle = { id: string; names: string[]; instructions: string; createdAt: number }
 export type ToolboxEvent = { id: string; bundleId: string; name: string; kind: 'skill' | 'mcp'; state: 'running' | 'succeeded' | 'failed'; startedAt: number; finishedAt?: number }

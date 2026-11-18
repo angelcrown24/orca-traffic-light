@@ -4,6 +4,9 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, lstat, realpath } fro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
+import { createHash } from 'node:crypto'
+import { recommendSkills } from './skill-recommend.mjs'
 import { createAutomation } from './automation.mjs'
 import { installBootstrap, removeBootstrap, bootstrapStatus } from './bootstrap.mjs'
 
@@ -233,6 +236,7 @@ test('stable installed CLI uses cwd and distinct handles without per-session pas
   const found = await run(['search', 'count'])
   assert.equal(found.code, 0)
   assert.equal(JSON.parse(found.out).items.length, 1)
+  assert.deepEqual(JSON.parse((await run(['recommend', 'help count values'])).out).items, [])
   const a = JSON.parse((await run(['start'])).out).session,
     b = JSON.parse((await run(['start'])).out).session
   assert.notEqual(a, b)
@@ -318,4 +322,76 @@ test('prepare verifies ownership without enabling workspaces or installing instr
   assert.equal((await access(home, workspace, 'search', { query: '' })).error.code, 'WORKSPACE_DISABLED')
   await assert.rejects(lstat(join(home, '.agents', 'AGENTS.md')), { code: 'ENOENT' })
   await assert.rejects(lstat(join(home, '.agents', 'traffic-light', 'auto-cli.mjs')), { code: 'ENOENT' })
+})
+
+test('a local task recommendation considers only skills approved for this handle and reads only on demand', async t => {
+  const received = []
+  const ranker = createServer(async (req, res) => {
+    if (req.url === '/api/tags') return res.end(JSON.stringify({ models: [{ name: 'kev:fixture', capabilities: ['decision'] }] }))
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    received.push(JSON.parse(Buffer.concat(chunks).toString()))
+    res.end(JSON.stringify({ answers: { s0: { type: 'noul', noul: 0.91 }, any: { type: 'noul', noul: 0.9 } } }))
+  })
+  await new Promise(resolve => ranker.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise(resolve => ranker.close(resolve)))
+  let reads = 0
+  const { home, workspace, runtime, events } = await fixture(t, {
+    rankEnv: { TYPESAFE_BASE_URL: 'http://127.0.0.1:' + ranker.address().port },
+    resolveRecord: async record => { reads++; return { path: record.path } }
+  })
+  const skill = { id: 'ui', kind: 'skill', name: 'interface guide', description: 'Accessible UI' }
+  const storage = { id: 'db', kind: 'skill', name: 'schema guide', description: 'SQL schemas' }
+  const path = join(home, 'private-skill-body.md')
+  await writeFile(path, 'Private full instructions.')
+  const grantSkills = allowed => runtime.grant({
+    workspaceId: 'project', workspacePath: workspace, records: [record, { ...allowed, path }],
+    items: [item, skill, storage]
+  })
+  await grantSkills(skill)
+  const { session } = (await access(home, workspace, 'start')).result
+  await grantSkills(storage)
+  const query = 'Fix icon contrast'
+  const before = await access(home, workspace, 'recommend', { session, query })
+  assert.deepEqual(before.result, { method: 'kev', items: [skill] })
+  assert.deepEqual(received[0].state, { task: query, skills: { s0: 'interface guide: Accessible UI' } })
+  assert.deepEqual((await access(home, workspace, 'recommend', { query })).result.items, [storage])
+  assert.equal(reads, 0)
+  assert.equal(events.length, 0)
+  const read = await access(home, workspace, 'skill', { session, id: before.result.items[0].id })
+  assert.equal(read.result.content, 'Private full instructions.')
+  assert.equal(reads, 1)
+  assert.equal(events.at(-1).state, 'succeeded')
+})
+
+test('a remote Jev configuration falls back to bounded keyword matches', async () => {
+  const candidates = Array.from({ length: 6 }, (_, i) => ({ id: String(i), name: 'fixture', kind: 'skill', description: i ? 'interface' : 'storage' }))
+  const env = { TYPESAFE_BASE_URL: 'https://api.typesafe.ai' }
+  assert.deepEqual(await recommendSkills('Improve interface', candidates, env), { method: 'keywords', items: candidates.slice(1, 4) })
+  assert.deepEqual((await recommendSkills('contrast', candidates, env)).items, [])
+})
+
+test('restoring an enabled workspace upgrades an owned older launcher and preserves user instructions', async t => {
+  const { home, workspace, runtime } = await fixture(t)
+  const ssot = join(home, '.agents', 'AGENTS.md'), base = join(home, '.agents', 'traffic-light')
+  await mkdir(join(home, '.agents'))
+  await writeFile(ssot, 'My instructions')
+  await installBootstrap({ home })
+  const manifestPath = join(base, 'bootstrap.json'), cli = join(base, 'auto-cli.mjs')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  const hash = value => createHash('sha256').update(value).digest('hex')
+  const older = (await readFile(ssot, 'utf8')).replace(/^- When a task would benefit[^\n]*\n/m, '')
+  await writeFile(ssot, older)
+  const actual = await realpath(ssot)
+  const file = manifest.files.find(f => f.path === actual)
+  file.blockHash = hash(older.match(/<!-- traffic-light:auto:start -->[\s\S]*?<!-- traffic-light:auto:end -->/)[0])
+  file.inserted = file.inserted.replace(/^- When a task would benefit[^\n]*\n/m, '')
+  await writeFile(cli, 'old launcher')
+  manifest.cliHash = hash('old launcher')
+  await writeFile(manifestPath, JSON.stringify(manifest))
+  await grant(runtime, workspace)
+  assert.match(await readFile(cli, 'utf8'), /recommend "task"/)
+  assert.match(await readFile(ssot, 'utf8'), /recommend "short task description"/)
+  await removeBootstrap({ home })
+  assert.equal(await readFile(ssot, 'utf8'), 'My instructions')
 })

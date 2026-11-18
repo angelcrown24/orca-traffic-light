@@ -2,6 +2,7 @@ import { atom, Badge, Box, Button, Callout, Checkbox, CodeView, Collapsible, Emp
 import type { CatalogItem, SyncResult, ToolboxCatalog, ToolboxState } from './toolbox-types'
 import './protocol'
 import { ArchitectureDiagram } from './toolbox-architecture'
+import { alreadyShared, closeImportDetails, resetImportReviews, ImportRow, isShared, needsImport, sectionTitle, sortImports, sourceGroups, type SourceGroup } from './toolbox-import'
 
 const catalog = atom<ToolboxCatalog>({ items: [], warnings: [] })
 const state = atom<ToolboxState>({ workspaceId: null, selected: [], bundle: null, events: [] })
@@ -13,7 +14,8 @@ const syncResults = atom<SyncResult[]>([])
 const query = atom('')
 const kind = atom('all')
 const selectedOnly = atom(false)
-const needsSharing = atom(false)
+const libraryMode = atom<'store' | 'import'>('traffic-light.library-view', 'store', { persist: 'workspace' })
+const receipts = atom<SourceGroup[]>([])
 const page = atom(0)
 const expandedItem = atom<string | null>(null)
 const settingsOpen = atom<boolean | null>(null)
@@ -71,7 +73,7 @@ const text = () => env.locale.toLowerCase().startsWith('ko') ? copy.ko : copy.en
 export async function openToolbox(force = false): Promise<void> {
   if (!force && read(loaded)) { await refreshState(); return }
   const request = ++epoch
-  set(loading, true); set(failure, ''); set(page, 0); set(copyStatus, 'idle')
+  set(loading, true); set(failure, ''); set(page, 0); set(copyStatus, 'idle'); set(receipts, []); set(syncResults, []); resetImportReviews()
   try {
     const [library, selection] = await Promise.all([plugin.request('toolbox.catalog'), plugin.request('toolbox.state')])
     if (request !== epoch) return
@@ -93,7 +95,7 @@ export function setupToolbox(ctx: PanelContext, isActive: () => boolean): void {
   ctx.subscriptions.push(on('workspace.changed', () => {
     epoch++
     set(state, { workspaceId: null, selected: [], bundle: null, events: [] })
-    set(busy, false); set(loading, false); set(failure, ''); set(copyStatus, 'idle'); set(syncResults, []); set(query, ''); set(selectedOnly, false); set(needsSharing, false); set(page, 0); set(expandedItem, null); set(settingsOpen, null)
+    set(busy, false); set(loading, false); set(failure, ''); set(copyStatus, 'idle'); set(syncResults, []); set(query, ''); set(selectedOnly, false); set(kind, 'all'); set(receipts, []); resetImportReviews(); set(page, 0); set(expandedItem, null); set(settingsOpen, null)
     if (canRead()) void openToolbox()
   }))
   ctx.subscriptions.push({ dispose: () => { epoch++; canRead = () => false } })
@@ -149,17 +151,22 @@ async function changeAutomation(enabled: boolean): Promise<void> {
   }
   finally { if (request === epoch) set(busy, false) }
 }
-async function syncItems(ids: string[]): Promise<void> {
+async function importSource(group: SourceGroup, id: string): Promise<void> {
   const current = read(state)
-  if (!current.workspaceId || read(busy) || !ids.length) return
+  if (!current.workspaceId || read(busy) || !group.items.some(item => item.id === id && item.available && item.sharing?.canSync)) return
   const request = ++epoch
   set(busy, true); set(failure, ''); set(syncResults, []); set(copyStatus, 'idle')
   try {
-    const result = await plugin.request('toolbox.sync', { workspaceId: current.workspaceId, ids })
+    const result = await plugin.request('toolbox.sync', { workspaceId: current.workspaceId, ids: [id], preserveProviderCopies: true })
     if (request !== epoch) return
-    set(catalog, result.catalog); set(syncResults, result.results)
-    const next = await plugin.request('toolbox.state')
-    if (request === epoch) set(state, next)
+    set(catalog, result.catalog); set(syncResults, result.results); resetImportReviews()
+    if (result.results.some(row => row.id === id && (row.status === 'synced' || row.status === 'unchanged'))) {
+      set(receipts, [...read(receipts).filter(row => row.key !== group.key), group])
+    }
+    try {
+      const next = await plugin.request('toolbox.state')
+      if (request === epoch) set(state, next)
+    } catch { if (request === epoch) set(failure, 'load') }
   } catch { if (request === epoch) set(failure, 'sync') }
   finally { if (request === epoch) set(busy, false) }
 }
@@ -170,7 +177,6 @@ function SelectionActions() {
   const t = text(), current = read(state)
   if (!current.selected.length) return null
   const enabled = current.automation?.enabled === true, pending = pendingSelection(current)
-  const syncable = read(catalog).items.filter(item => current.selected.includes(item.id) && item.sharing?.canSync).map(item => item.id)
   return <Box direction="column" gap="xs" padding="sm" radius="sm" background="muted">
     <Row justify="between" align="center" gap="xs">
       <Text size="sm" weight="semibold">{`${t.selectedShort} ${current.selected.length} / 24`}</Text>
@@ -178,7 +184,6 @@ function SelectionActions() {
     </Row>
     <Row gap="xs" wrap>
       <Button icon={enabled ? 'check' : 'plug'} tone="accent" size="sm" disabled={!current.workspaceId || read(busy) || read(loading) || (enabled && !pending)} onPress={() => changeAutomation(true)}>{enabled ? pending ? t.apply : t.applied : t.connect}</Button>
-      {syncable.length ? <Button icon="download" variant="outline" size="sm" disabled={!current.workspaceId || read(busy)} onPress={() => syncItems(syncable)}>{t.syncSelected}</Button> : null}
     </Row>
     {current.selected.length >= 24 ? <Text tone="warning" size="xs">{t.limit}</Text> : null}
   </Box>
@@ -189,7 +194,7 @@ function Item({ item }: { item: CatalogItem }) {
   const source = providers.length ? `${providers[0]}${providers.length > 1 ? ` +${providers.length - 1}` : ''}` : t.shared
   return <Box direction="column" gap="xs" padding="sm" background={current.selected.includes(item.id) ? 'muted' : 'none'}>
     <Row align="center" justify="between" gap="xs">
-      <Box grow minWidth={0}><Checkbox label={item.name} checked={current.selected.includes(item.id)} disabled={!item.available || !current.workspaceId || read(busy) || (!current.selected.includes(item.id) && current.selected.length >= 24)} onChange={checked => changeSelection(checked ? [...current.selected, item.id] : current.selected.filter(id => id !== item.id))} /></Box>
+      <Box grow minWidth={0}><Checkbox label={item.name} checked={current.selected.includes(item.id)} disabled={!current.workspaceId || read(busy) || (!current.selected.includes(item.id) && (!item.available || current.selected.length >= 24))} onChange={checked => changeSelection(checked ? [...current.selected, item.id] : current.selected.filter(id => id !== item.id))} /></Box>
       <IconButton icon={expanded ? 'collapse' : 'expand'} label={`${t.detailsFor}: ${item.name}`} tooltip={t.details} variant="ghost" size="sm" onPress={() => set(expandedItem, expanded ? null : item.id)} />
     </Row>
     <Row justify="between" align="center" gap="xs">
@@ -200,9 +205,9 @@ function Item({ item }: { item: CatalogItem }) {
       <Text size="sm" muted>{item.description || t.noDescription}</Text>
       <Text muted size="xs">{`${t.foundIn}: ${item.providers.join(' · ')}`}</Text>
       <Text muted size="xs">{`${t.source}: ${item.source}`}</Text>
+      {item.skillRequirements ? <Text size="xs" muted>{(t === copy.ko ? '필요 환경 · ' : 'Requires · ') + item.skillRequirements}</Text> : null}
       {item.reason ? <Text size="sm" tone="warning">{item.reason}</Text> : null}
       {item.sharing?.detail ? <Text size="sm" muted>{item.sharing.detail}</Text> : null}
-      {item.sharing?.canSync ? <Button icon="download" variant="outline" size="sm" disabled={!current.workspaceId || read(busy)} onPress={() => syncItems([item.id])}>{item.sharing.state === 'update' ? t.syncUpdate : t.sync}</Button> : null}
     </Stack> : null}
   </Box>
 }
@@ -246,14 +251,37 @@ function ConnectionSettings() {
     </Stack></Collapsible>
   </Stack>
 }
+function changeView(value: 'store' | 'import') {
+  set(libraryMode, value); set(page, 0); set(kind, 'all'); set(query, ''); set(selectedOnly, false)
+  set(expandedItem, null); set(receipts, []); set(syncResults, []); closeImportDetails()
+}
+
+function StoreRow({ group }: { group: SourceGroup }) {
+  if (group.items.length === 1) return <Item item={group.items[0]} />
+  const ko = env.locale.toLowerCase().startsWith('ko')
+  const title = ko ? group.name + ' · 원본 ' + group.items.length + '개' : group.name + ' · ' + group.items.length + ' sources'
+  return <Box padding="sm"><Collapsible title={title}><Stack gap="xs">{group.items.map(item => <Item key={item.id} item={item} />)}</Stack></Collapsible></Box>
+}
+
 export function ToolboxPanel() {
-  const t = text(), current = read(state), items = read(catalog).items, automation = current.automation
+  const ko = env.locale.toLowerCase().startsWith('ko'), t = text(), current = read(state), items = read(catalog).items
+  const automation = current.automation, importing = read(libraryMode) === 'import'
   const showSettings = read(settingsOpen) ?? read(manualOpen)
+  const store = sourceGroups(items.filter(isShared))
+  const imports = sourceGroups(items).filter(needsImport)
+  const completed = new Map(read(receipts).map(group => [group.key, group]))
+  const browse = [...imports.filter(group => !completed.has(group.key)), ...completed.values()]
+  const onlySelected = read(selectedOnly) && current.selected.length > 0
+  const selection = onlySelected ? sourceGroups(items.filter(item => current.selected.includes(item.id))) : store
+  const groups = importing ? sortImports(browse) : selection
   const search = read(query).trim().toLocaleLowerCase()
-  const needsSync = (item: CatalogItem) => ['provider', 'update', 'conflict'].includes(item.sharing?.state ?? '')
-  const filtered = items.filter(item => (read(kind) === 'all' || item.kind === read(kind)) && (!read(selectedOnly) || current.selected.includes(item.id)) && (!read(needsSharing) || needsSync(item)) && (!search || [item.name, item.description, item.source, ...item.providers].join(' ').toLocaleLowerCase().includes(search)))
+  const filtered = groups.filter(group => (read(kind) === 'all' || group.kind === read(kind)) &&
+    (!search || group.items.some(item => [item.name, item.description, item.source, ...item.providers].join(' ').toLocaleLowerCase().includes(search))))
   const currentPage = Math.min(read(page), Math.max(0, Math.ceil(filtered.length / 30) - 1))
-  const typeFilters = [{ value: 'all', label: t.allShort, count: items.length }, { value: 'skill', label: t.skills, count: items.filter(item => item.kind === 'skill').length }, { value: 'mcp', label: 'MCP', count: items.filter(item => item.kind === 'mcp').length }]
+  const visible = filtered.slice(currentPage * 30, (currentPage + 1) * 30)
+  const typeFilters = [{ value: 'all', label: t.allShort }, { value: 'skill', label: t.skills }, { value: 'mcp', label: 'MCP' }]
+  const unsuccessful = read(syncResults).filter(row => row.status === 'conflict' || row.status === 'failed')
+  const importCount = imports.filter(group => !completed.has(group.key) && !alreadyShared(group)).length
   return <Stack gap="sm">
     <Row justify="between" align="center" gap="xs">
       <Row gap="xs" align="center"><Text muted size="sm">{t.autoTitle}</Text><Badge tone={automation?.enabled ? 'success' : 'neutral'}>{automation?.enabled ? `${t.autoOn} · ${automation.appliedIds?.length ?? 0}` : t.autoOff}</Badge></Row>
@@ -263,21 +291,31 @@ export function ToolboxPanel() {
       </Row>
     </Row>
     {showSettings ? <Box direction="column" gap="sm" padding="sm" border radius="sm"><Text weight="semibold" size="sm">{t.settings}</Text><ConnectionSettings /></Box> : null}
+    <Row gap="xs" wrap>
+      <Button size="sm" icon={importing ? 'blocks' : 'check'} variant={importing ? 'ghost' : 'solid'} tone={importing ? 'neutral' : 'accent'} onPress={() => { if (importing) changeView('store') }}>{(ko ? '공용 보관함 ' : 'Shared library ') + store.length}</Button>
+      <Button size="sm" icon={importing ? 'check' : 'download'} variant={importing ? 'solid' : 'ghost'} tone={importing ? 'accent' : 'neutral'} onPress={() => { if (!importing) changeView('import') }}>{(ko ? '가져오기 ' : 'Import ') + importCount}</Button>
+    </Row>
     <Input label={t.search} labelHidden value={read(query)} type="search" placeholder={t.searchPlaceholder} onChange={value => { set(query, value); set(page, 0) }} />
-    <Stack gap="xs">
-      <Row gap="xs" wrap>{typeFilters.map(filter => <Button key={filter.value} size="sm" variant={read(kind) === filter.value ? 'solid' : 'ghost'} tone={read(kind) === filter.value ? 'accent' : 'neutral'} icon={read(kind) === filter.value ? 'check' : undefined} tooltip={`${t.filter}: ${filter.label}${read(kind) === filter.value ? ` · ${t.selected}` : ''}`} onPress={() => { set(kind, filter.value); set(page, 0) }}>{`${filter.label} ${filter.count}`}</Button>)}</Row>
-      <Row gap="xs" wrap>
-        <Button size="sm" variant={read(selectedOnly) ? 'solid' : 'ghost'} tone={read(selectedOnly) ? 'accent' : 'neutral'} icon={read(selectedOnly) ? 'check' : undefined} tooltip={`${t.selectedOnly}${read(selectedOnly) ? ` · ${t.selected}` : ''}`} onPress={() => { set(selectedOnly, !read(selectedOnly)); set(page, 0) }}>{`${t.selectedShort} ${current.selected.length}`}</Button>
-        <Button size="sm" variant={read(needsSharing) ? 'solid' : 'ghost'} tone={read(needsSharing) ? 'accent' : 'neutral'} icon={read(needsSharing) ? 'check' : undefined} tooltip={`${t.needsSharing}${read(needsSharing) ? ` · ${t.selected}` : ''}`} onPress={() => { set(needsSharing, !read(needsSharing)); set(page, 0) }}>{`${t.sharingShort} ${items.filter(needsSync).length}`}</Button>
-      </Row>
-    </Stack>
-    <SelectionActions />
-    {pendingSelection(current) ? <Text size="xs" tone="warning">{t.pending}</Text> : null}
+    <Row gap="xs" wrap>
+      {typeFilters.map(filter => <Button key={filter.value} size="sm" variant={read(kind) === filter.value ? 'outline' : 'ghost'} icon={read(kind) === filter.value ? 'check' : undefined} tooltip={t.filter + ' · ' + filter.label} onPress={() => { set(kind, filter.value); set(page, 0) }}>{filter.label}</Button>)}
+      {!importing && current.selected.length ? <Button size="sm" variant={read(selectedOnly) ? 'outline' : 'ghost'} icon={read(selectedOnly) ? 'check' : undefined} tooltip={t.selectedOnly} onPress={() => { set(selectedOnly, !read(selectedOnly)); set(page, 0) }}>{t.selectedShort + ' ' + current.selected.length}</Button> : null}
+    </Row>
+    {!importing ? <SelectionActions /> : null}
+    {!importing && pendingSelection(current) ? <Text size="xs" tone="warning">{t.pending}</Text> : null}
     {read(failure) || automation?.error ? <Callout tone="danger"><Stack gap="xs"><Text size="sm">{read(failure) === 'load' ? t.loadError : automation?.error ?? (read(failure) === 'automation' ? t.autoError : read(failure) === 'sync' ? t.syncError : t.saveError)}</Text><Button size="sm" variant="ghost" onPress={() => openToolbox(true)} disabled={read(busy) || read(loading)}>{t.retry}</Button></Stack></Callout> : null}
     {!read(loading) && read(loaded) && !current.workspaceId ? <Callout tone="warning"><Text size="sm">{t.noWorkspace}</Text></Callout> : null}
-    {read(loading) ? <Text muted size="sm">{t.loading}</Text> : !items.length ? <EmptyState icon="blocks" title={t.empty} description={t.emptyHelp} /> : !filtered.length ? <EmptyState icon="search" title={t.noMatch} description={t.noMatchHelp} /> : <Box direction="column" gap="none" border radius="sm">{filtered.slice(currentPage * 30, (currentPage + 1) * 30).map((item, index) => <Stack key={item.id} gap="none">{index ? <Separator /> : null}<Item item={item} /></Stack>)}</Box>}
+    {importing && unsuccessful.map(row => <Callout key={row.id} tone="warning"><Text size="sm">{row.name + ' · ' + (row.status === 'conflict' ? t.conflict : t.syncFailed)}</Text><Text size="sm">{row.message}</Text></Callout>)}
+    {read(loading) ? <Text muted size="sm">{t.loading}</Text>
+      : !items.length ? <EmptyState icon="blocks" title={t.empty} description={t.emptyHelp} />
+      : visible.length ? <Box direction="column" gap="none" border radius="sm">{visible.map((group, index) => <Stack key={group.key} gap="none">
+        {index ? <Separator /> : null}
+        {importing && (!index || sectionTitle(visible[index - 1]) !== sectionTitle(group)) ? <Box padding="sm" background="muted"><Text size="xs" weight="semibold">{sectionTitle(group)}</Text></Box> : null}
+        {importing ? <ImportRow group={group} added={completed.has(group.key)} disabled={!current.workspaceId || read(busy)} add={id => importSource(group, id)} /> : <StoreRow group={group} />}
+      </Stack>)}</Box>
+      : search || read(kind) !== 'all' || (!importing && onlySelected) ? <EmptyState icon="search" title={t.noMatch} description={t.noMatchHelp} />
+      : importing ? <EmptyState icon="check" title={ko ? '가져올 항목이 없습니다' : 'Nothing to import'} />
+      : <EmptyState icon="blocks" title={ko ? '공용 보관함이 비어 있습니다' : 'Your shared library is empty'} description={ko ? '가져오기에서 첫 항목을 추가하세요.' : 'Open Import to add your first item.'} />}
     {filtered.length > 30 ? <Row justify="between" gap="sm" align="center"><Button size="sm" variant="ghost" disabled={currentPage === 0} onPress={() => set(page, currentPage - 1)}>{t.previous}</Button><Text muted size="xs">{`${currentPage + 1} / ${Math.ceil(filtered.length / 30)}`}</Text><Button size="sm" variant="ghost" disabled={(currentPage + 1) * 30 >= filtered.length} onPress={() => set(page, currentPage + 1)}>{t.more}</Button></Row> : null}
-    {read(syncResults).length ? <Collapsible title={`${t.syncResults} · ${read(syncResults).length}`} defaultOpen={read(syncResults).some(result => result.status === 'conflict' || result.status === 'failed')}><Stack gap="sm">{read(syncResults).map((result, index) => <Stack key={index} gap="xs"><Row justify="between" gap="sm" wrap><Text size="sm">{result.name}</Text><Badge tone={result.status === 'failed' ? 'danger' : result.status === 'conflict' ? 'warning' : 'success'}>{result.status === 'synced' ? t.synced : result.status === 'unchanged' ? t.unchanged : result.status === 'conflict' ? t.conflict : t.syncFailed}</Badge></Row><Text muted size="xs">{result.message}</Text></Stack>)}</Stack></Collapsible> : null}
   </Stack>
 }
 export function ArchitecturePanel() {

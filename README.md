@@ -6,8 +6,8 @@ An Orca sidebar for agent activity and a shared, on-demand library of local skil
 
 **Connect once, choose for the workspace, load only when needed.** Traffic Light has three tabs: **Activity**, **Library**, and **How it works** (Korean labels follow Orca's language).
 
-1. Open **Library / 공용 도구** and search the skills and MCP configurations already installed on this computer.
-2. Choose up to 24 items for the current local workspace. Nothing is selected by default; browsing or selecting never starts an MCP server.
+1. Open **Library / 공용 도구 → Import / 가져오기**. Each skill or MCP name appears once per type. Add a single source directly, choose a provider when configurations differ, or compare with the copy already in the shared library.
+2. In **Shared library / 공용 보관함**, choose up to 24 items for the current local workspace. Nothing is selected by default; browsing or selecting never starts an MCP server.
 3. Press **Connect / 연결** in the selection bar. This installs a short shared instruction block and local launcher once. Subsequent sessions that load these instructions can search and use the selected capabilities without a pasted guide. Connection switches and manual setup are under **Connection settings / 연결 설정**.
 4. The agent uses its existing shell tool to search a small amount of metadata, create its own connection handle, and read only a requested skill or discover/call only a requested MCP server. Changing the selection requires **Apply selection**; existing handles retain their prior selection.
 5. **Shared runner activity** shows actual start/completion/failure events for these requests. A skill read records content delivery, not proof that a model keeps applying it.
@@ -16,7 +16,7 @@ Automatic setup writes an owned block to `~/.agents/AGENTS.md`, preserves existi
 
 This requires **local Node.js 18+**, shell access, and an agent that loads and follows the shared instructions. Orca's plugin API cannot force instruction refresh in already-running native conversations or inject new native MCP tools. **Manual connection** remains a collapsed fallback for those conversations; restarting them is unnecessary. Existing provider-native MCP registrations and skill catalogs remain independent, so the plugin cannot remove context the provider already loads itself.
 
-Use an item's details button for its description, source and **Add to shared store / 공용으로 모으기** action, or **Sync selected** for a chosen batch. Search and compact filters stay above the list; selection actions appear when items are selected. The architecture tab displays a connected diagram with current provider, shared-store, workspace and runtime counts. Counts distinguish **skills** from **MCP servers**; individual server tools are discovered only when requested.
+Import compares MCP connection settings or a skill’s complete package on demand. An existing shared copy can be compared before making a choice. Differences are summarized by category, and matching packages are marked **Already shared**. Importing a source and granting it to an agent are separate actions. The architecture tab displays a connected diagram with current provider, shared-store, workspace and runtime counts. Counts distinguish **skills** from **MCP servers**; individual server tools are discovered only when requested.
 
 ```mermaid
 flowchart TD
@@ -35,7 +35,13 @@ flowchart TD
 
 Skill synchronization includes the package's supporting files. Managed shared snapshots keep previous versions intact; `~/.agents/skills/<name>` points to the current shared version, and missing provider skill entries link to that common location. Original provider packages are retained. Source changes appear as an update to synchronize explicitly. Different existing destinations are reported as conflicts, never overwritten.
 
-For MCP, synchronization records the source location and approved fingerprint in a private shared registry. Credentials remain in the original provider configuration and are resolved only when a server is requested. Source changes require explicit synchronization and application to new connections. This makes supported MCP servers callable through the shared runner without registering them in every provider's startup configuration. Provider-owned OAuth and proprietary built-in tools still require their native connector.
+For MCP, synchronization records the source location and approved fingerprint in a private shared registry. Credentials remain in the original provider configuration and are resolved only when a server is requested. Source changes require explicit synchronization and application to new connections. This makes supported MCP servers callable through the shared runner without registering them in every provider's startup configuration. Provider-owned OAuth and proprietary built-in tools require their native connector. Stdio servers receive basic operating-system variables and environment entries explicitly supplied or inherited by their configuration.
+
+### How a skill can be used without mentioning its name
+
+In a connected workspace, an agent following the shared instructions can pass a brief task description to the local launcher's `recommend` command. It ranks names and descriptions from the approved skill list, using a local Kev decision model when available and local keyword matching otherwise. An existing conversation handle uses its pinned list. The result contains up to three suggestions. When the agent chooses one, it reads that skill through the handle; this read appears in shared runner activity.
+
+The portable skill is the instruction file and its supporting package. The consuming agent still needs the software and tools those instructions call for. The importer shows declared requirements. Skills with recognized native execution or invocation controls, including Claude hooks or forked context, Claude’s `disable-model-invocation`, and Codex’s explicit-only policy in `agents/openai.yaml`, stay with their native provider. This check covers package declarations; provider-level policies, installed dependencies and instructions embedded in arbitrary prose still depend on the consuming environment. See the [Agent Skills format](https://agentskills.io/specification), [Claude Code skills](https://code.claude.com/docs/en/skills), and [Codex skill policy](https://developers.openai.com/codex/skills/).
 
 ### What is discovered
 
@@ -100,4 +106,4 @@ Run `node --test runtime/*.test.mjs`, `orca plugin validate . --json`, `orca plu
 
 ## License
 
-MIT-0. See [LICENSE](LICENSE). The vendored smol-toml 1.9.1 parser retains its BSD-3-Clause license in [runtime/vendor/smol-toml.LICENSE](runtime/vendor/smol-toml.LICENSE).
+MIT-0. See [LICENSE](LICENSE). The vendored parsers retain their respective licenses: [smol-toml 1.9.1, BSD-3-Clause](runtime/vendor/smol-toml.LICENSE) and [js-yaml 5.5.0, MIT](runtime/vendor/js-yaml.LICENSE).

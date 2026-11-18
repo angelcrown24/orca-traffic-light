@@ -17,10 +17,10 @@ async function bytes(path, limit) {
   try {
     const info = await handle.stat()
     if (!info.isFile() || info.size > limit) throw failure('A source file is unsupported or too large.')
-    const buffer = Buffer.alloc(limit + 1)
+    const buffer = Buffer.alloc(info.size + 1)
     let length = 0
-    while (length <= limit) { const next = await handle.read(buffer, length, buffer.length - length, length); if (!next.bytesRead) break; length += next.bytesRead }
-    if (length > limit) throw failure('A source file exceeds the size limit.')
+    while (length < buffer.length) { const next = await handle.read(buffer, length, buffer.length - length, length); if (!next.bytesRead) break; length += next.bytesRead }
+    if (length !== info.size) throw failure('A source file changed while it was being read.')
     return buffer.subarray(0, length)
   } finally { await handle.close() }
 }
@@ -141,8 +141,9 @@ const slugFor = record => {
   return name
 }
 
-async function syncSkill(record, registry, home) {
+async function syncSkill(record, registry, home, preserveProviderCopies) {
   const slug = record.syncKey ?? slugFor(record), previous = Object.hasOwn(registry.skills, slug) ? registry.skills[slug] : undefined
+  if (previous && !record.syncKey) throw failure('A different source is already registered under this name. Compare it with the shared copy.')
   const sourcePath = previous?.sourcePath ?? dirname(record.path)
   const source = await inspectSkillPackage(sourcePath, true)
   const canonical = join(home, '.agents', 'skills', slug)
@@ -160,6 +161,7 @@ async function syncSkill(record, registry, home) {
     if (info) {
       const resolved = await realpath(destination).catch(() => null)
       if (resolved === source.root || resolved === previous?.snapshot || (info.isSymbolicLink() && resolve(dirname(destination), await readlink(destination)) === canonical)) continue
+      if (preserveProviderCopies && resolved && (await lstat(join(resolved, 'SKILL.md')).catch(() => null))?.isFile()) continue
       throw failure(`A different skill already exists in ${root}. Nothing was overwritten.`)
     }
     destinations.push(destination)
@@ -215,7 +217,7 @@ async function syncSkill(record, registry, home) {
   } finally { await unlink(temporary).catch(() => {}) }
 }
 
-export async function syncCapabilities({ ids, home = homedir() } = {}) {
+export async function syncCapabilities({ ids, home = homedir(), preserveProviderCopies = false } = {}) {
   if (!Array.isArray(ids) || !ids.length || ids.length > 24 || ids.some(id => typeof id !== 'string')) throw new Error('Choose between 1 and 24 capabilities to synchronize.')
   home = await realpath(home)
   const directory = join(home, '.agents', 'traffic-light')
@@ -230,8 +232,13 @@ export async function syncCapabilities({ ids, home = homedir() } = {}) {
       if (!item || !record) { results.push({ id, name: 'Unavailable capability', status: 'failed', message: 'The item changed. Refresh the library.' }); continue }
       try {
         if (!item.available) throw failure('This capability requires its native connector and cannot be synchronized.')
-        if (record.kind === 'skill') results.push({ id, name: item.name, ...await syncSkill(record, registry, home) })
+        if (record.kind === 'skill') results.push({ id, name: item.name, ...await syncSkill(record, registry, home, preserveProviderCopies === true) })
         else {
+          if (preserveProviderCopies === true && !Object.hasOwn(registry.mcp, id)) {
+            const taken = Object.values(registry.mcp).some(pin =>
+              pin.name?.toLowerCase() === item.name.toLowerCase() && catalog.records.has(pin.id))
+            if (taken) throw failure('Another source with this name is already shared. Refresh the library to compare them.')
+          }
           const pin = { id, name: record.name, kind: 'mcp', configPath: record.configPath, format: record.format, serverKey: record.serverKey, fingerprint: record.fingerprint }
           const unchanged = registry.mcp[id]?.fingerprint === pin.fingerprint
           await saveRegistry(home, { ...registry, mcp: { ...registry.mcp, [id]: pin } }); registry.mcp[id] = pin

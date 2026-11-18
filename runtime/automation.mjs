@@ -13,6 +13,7 @@ import {
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, relative, isAbsolute, sep } from 'node:path'
+import { recommendSkills } from './skill-recommend.mjs'
 import { createToolboxService } from './service.mjs'
 import { resolveRecord as defaultResolve } from './catalog.mjs'
 import {
@@ -20,6 +21,7 @@ import {
   privateDirectory,
   bootstrapStatus,
   installBootstrap,
+  refreshOwnedBootstrap,
   removeBootstrap
 } from './bootstrap.mjs'
 
@@ -200,19 +202,17 @@ export async function createAutomation(options = {}) {
       )
     return { grant: matches[0], path }
   }
+  function approvedMetadata(records, items) {
+    const selected = new Set(records.map(record => record.id))
+    return items.filter(item => selected.has(item.id)).map(item => ({
+      id: item.id, name: item.name, kind: item.kind, description: String(item.description ?? '').slice(0, 240)
+    }))
+  }
   function metadata(records, items, query) {
     if (typeof query !== 'string' || query.length > 256)
       throw reject('INVALID_QUERY', 'Use a search query of at most 256 characters.')
     const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean)
-    const selected = new Set(records.map((x) => x.id))
-    const found = items
-      .filter((x) => selected.has(x.id))
-      .map((x) => ({
-        id: x.id,
-        name: x.name,
-        kind: x.kind,
-        description: String(x.description ?? '').slice(0, 240)
-      }))
+    const found = approvedMetadata(records, items)
       .filter((x) =>
         terms.every((word) => (x.name + ' ' + x.description).toLowerCase().includes(word))
       )
@@ -276,6 +276,16 @@ export async function createAutomation(options = {}) {
         'SESSION_UNAVAILABLE',
         'This session handle is expired or belongs to another workspace.'
       )
+    if (request.op === 'recommend') {
+      if (typeof request.query !== 'string' || !request.query.trim() || request.query.length > 256)
+        throw reject('INVALID_QUERY', 'Describe the task in 1 to 256 characters.')
+      const scope = session ?? grant
+      const skills = approvedMetadata(scope.records, scope.items).filter(item => item.kind === 'skill')
+      const result = await recommendSkills(request.query.trim(), skills, options.rankEnv)
+      if (closed || (session ? !sessions.has(session.id) : grants.get(grant.workspaceId) !== grant))
+        throw reject('WORKSPACE_CHANGED', 'The connection changed. Search again with the current selection.')
+      return result
+    }
     if (request.op === 'search')
       return metadata(
         session?.records ?? grant.records,
@@ -354,6 +364,7 @@ export async function createAutomation(options = {}) {
             throw reject('AUTOMATION_CONFLICT', 'The connection owner changed while preparing.')
           await rename(leasePath, join(base, 'automation-stale-' + randomUUID() + '.json'))
         }
+        await refreshOwnedBootstrap(home)
         service = await createToolboxService({
           resolveRecord: options.resolveRecord ?? defaultResolve,
           onEvent: event

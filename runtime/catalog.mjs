@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import toml from './vendor/smol-toml.cjs'
 import { decorateSharing, inspectSkillPackage } from './shared-sync.mjs'
+import { skillPortability } from './skill-portability.mjs'
 
 const CONFIG_LIMIT = 2 * 1024 * 1024
 const SKILL_LIMIT = 64 * 1024
@@ -68,6 +69,10 @@ const nativeNames = new Set(['node_repl', 'computer-use', 'codex_apps', 'codex-a
 
 function normalize(server, format, resolveEnv = false) {
   if (!plain(server)) throw fail('INVALID_CONFIG', 'Server definition must be an object.')
+  const declared = JSON.stringify(server)
+  if (declared.includes('${') || (format === 'gemini' && /\$[a-z_]/i.test(declared))) {
+    throw fail('CAPABILITY_UNAVAILABLE', 'Environment placeholders require this provider’s native connector.')
+  }
   if (server.enabled === false || server.disabled === true) throw fail('CAPABILITY_UNAVAILABLE', 'Disabled in the source configuration.')
   if (restrictions.some((key) => key in server)) throw fail('CAPABILITY_UNAVAILABLE', 'Per-tool restrictions require this provider’s native connector.')
   if (['oauth', 'auth', 'authorization', 'authProvider', 'authProviderType', 'oauth_client_id', 'http_headers_helper', 'bearerToken', 'accessToken', 'clientSecret'].some((key) => key in server)) {
@@ -76,9 +81,35 @@ function normalize(server, format, resolveEnv = false) {
   if (server.type === 'sse' || server.transport === 'sse' || (format === 'gemini' && server.url && !server.httpUrl)) {
     throw fail('CAPABILITY_UNAVAILABLE', 'Legacy SSE transport requires a native connector.')
   }
-  const url = format === 'gemini' ? server.httpUrl : server.url ?? server.serverUrl
+  // A native provider may enforce security or execution semantics on an option
+  // the shared client cannot interpret. Only import options we can honor.
+  const urlField = format === 'gemini' ? 'httpUrl' : format === 'antigravity' && server.serverUrl !== undefined ? 'serverUrl' : 'url'
+  const url = server[urlField]
+  const transport = server.command ? 'stdio' : 'http'
+  for (const declared of [server.type, server.transport]) {
+    if (declared !== undefined && declared !== transport && !(transport === 'http' && ['streamableHttp', 'streamable-http'].includes(declared))) {
+      throw fail('CAPABILITY_UNAVAILABLE', 'The declared transport requires this provider’s native connector.')
+    }
+  }
+  const keys = transport === 'stdio' ? ['command', 'args', 'env', 'cwd', 'env_vars'] : [urlField, 'headers', 'http_headers', 'env_http_headers', 'bearer_token_env_var']
+  const supported = new Set(['type', 'transport', 'enabled', 'disabled', ...keys])
+  if (format === 'codex') { supported.add('startup_timeout_sec'); supported.add('tool_timeout_sec') }
+  if (format === 'gemini') supported.add('timeout')
+  if (Object.keys(server).some(key => !supported.has(key))) {
+    throw fail('CAPABILITY_UNAVAILABLE', 'This provider has additional server options the shared runner cannot apply.')
+  }
+  if ((server.enabled !== undefined && typeof server.enabled !== 'boolean') || (server.disabled !== undefined && typeof server.disabled !== 'boolean')) {
+    throw fail('INVALID_CONFIG', 'Invalid server enablement setting.')
+  }
+  if (server.headers !== undefined && server.http_headers !== undefined) throw fail('INVALID_CONFIG', 'Ambiguous HTTP headers.')
   if (server.command && url) throw fail('INVALID_CONFIG', 'Ambiguous server transport.')
   const normalized = {}
+  for (const [field, target, scale] of [['startup_timeout_sec', 'startupTimeoutMs', 1000], ['tool_timeout_sec', 'requestTimeoutMs', 1000], ['timeout', 'requestTimeoutMs', 1]]) {
+    if (server[field] === undefined) continue
+    const ms = server[field] * scale
+    if (typeof server[field] !== 'number' || !Number.isSafeInteger(ms) || ms <= 0) throw fail('INVALID_CONFIG', 'Invalid server timeout.')
+    normalized[target] = ms
+  }
   if (server.command) {
     if (typeof server.command !== 'string' || server.command.includes('\0')) throw fail('INVALID_CONFIG', 'Invalid server command.')
     if (['node_repl', 'SkyComputerUseClient'].includes(basename(server.command))) throw fail('CAPABILITY_UNAVAILABLE', 'Provider-internal tools require their native connector.')
@@ -94,7 +125,7 @@ function normalize(server, format, resolveEnv = false) {
     normalized.args = server.args ?? []
     normalized.env = { ...server.env }
     if (resolveEnv) for (const key of server.env_vars ?? []) {
-      if (key in normalized.env) continue
+      if (Object.hasOwn(normalized.env, key)) continue
       if (process.env[key] === undefined) throw fail('CAPABILITY_UNAVAILABLE', 'A required environment variable is not available.')
       normalized.env[key] = process.env[key]
     }
@@ -123,7 +154,6 @@ function normalize(server, format, resolveEnv = false) {
       if (Object.entries(normalized.headers).some(([key, value]) => /[\r\n]/.test(key + value))) throw fail('INVALID_CONFIG', 'Invalid resolved HTTP headers.')
     }
   } else throw fail('CAPABILITY_UNAVAILABLE', 'No supported stdio or HTTP transport is configured.')
-  if (JSON.stringify(normalized).includes('${')) throw fail('CAPABILITY_UNAVAILABLE', 'Environment placeholders require this provider’s native connector.')
   return normalized
 }
 
@@ -134,7 +164,18 @@ async function configServers(path, format) {
   catch { throw fail('INVALID_CONFIG', 'Could not parse the configuration.') }
   const servers = data?.[format === 'codex' ? 'mcp_servers' : 'mcpServers'] ?? {}
   if (!plain(servers)) throw fail('INVALID_CONFIG', 'The MCP server section must be an object.')
-  return servers
+  // Provider-wide enablement is part of discovery and of each later re-read.
+  const denied = [data.disabledMcpServers, data.mcp?.excluded].filter(value => value !== undefined)
+  const allowed = data.mcp?.allowed
+  const lists = allowed === undefined ? denied : [...denied, allowed]
+  if (lists.some(list => !Array.isArray(list) || list.some(name => typeof name !== 'string'))) {
+    throw fail('INVALID_CONFIG', 'Unsupported provider server policy.')
+  }
+  if (!lists.length) return servers
+  return Object.fromEntries(Object.entries(servers).map(([name, definition]) => [
+    name, denied.some(list => list.includes(name)) || (allowed && !allowed.includes(name))
+      ? { ...definition, disabled: true } : definition,
+  ]))
 }
 
 export async function scanCatalog({ home = homedir() } = {}) {
@@ -163,7 +204,7 @@ export async function scanCatalog({ home = homedir() } = {}) {
         } else {
           const meta = metadata(content, clean(basename(canonical), 100))
           const id = `skill:${hash(resolved).slice(0, 24)}`
-          const item = { id, kind: 'skill', ...meta, providers: [provider], source: root, available: true }
+          const item = { id, kind: 'skill', ...meta, providers: [provider], source: root, ...await skillPortability(content, resolved) }
           items.push(item); skillItems.set(resolved, item)
           records.set(id, { id, name: item.name, kind: 'skill', path: resolved, fingerprint: hash(content) })
         }
@@ -208,7 +249,7 @@ export async function scanCatalog({ home = homedir() } = {}) {
       let normalized, reason
       try { normalized = normalize(server, format) } catch (error) { reason = error.code ? error.message : 'Unsupported server configuration.' }
       const fingerprint = hash(stable(server))
-      const signature = normalized ? stable({ normalized, env_vars: server.env_vars, bearer_token_env_var: server.bearer_token_env_var, env_http_headers: server.env_http_headers }) : `${configPath}:${serverKey}`
+      const signature = normalized ? stable([name.toLowerCase(), mcpComparisonFields(server, normalized)]) : `${configPath}:${serverKey}`
       const duplicate = mcpItems.get(signature)
       if (duplicate) { if (!duplicate.providers.includes(provider)) duplicate.providers.push(provider); continue }
       const id = `mcp:${hash(`${configPath}\0${serverKey}`).slice(0, 24)}`
@@ -228,15 +269,40 @@ export async function resolveRecord(record) {
       const path = await realpath(record.path)
       const content = await readBounded(path, SKILL_LIMIT)
       if (path !== record.path || hash(content) !== record.fingerprint) throw fail('CAPABILITY_CHANGED', 'This skill changed. Prepare the selection again.')
+      const portability = await skillPortability(content, path)
+      if (!portability.available) throw fail('CAPABILITY_UNAVAILABLE', portability.reason)
       if (record.packageRoot && (await inspectSkillPackage(record.packageRoot, true)).fingerprint !== record.packageFingerprint) throw fail('CAPABILITY_CHANGED', 'This skill package changed. Prepare the selection again.')
       return { path }
-    } catch (error) { if (error.code === 'CAPABILITY_CHANGED') throw error; throw fail('CAPABILITY_UNAVAILABLE', 'This skill is no longer readable.') }
+    } catch (error) { if (['CAPABILITY_CHANGED', 'CAPABILITY_UNAVAILABLE'].includes(error.code)) throw error; throw fail('CAPABILITY_UNAVAILABLE', 'This skill is no longer readable.') }
   }
+  return normalize(await readMcpSource(record), record.format, true)
+}
+
+async function readMcpSource(record) {
   if (record?.kind !== 'mcp') throw fail('INVALID_CONFIG', 'Unknown capability record.')
   let servers
   try { servers = await configServers(record.configPath, record.format) }
   catch { throw fail('CAPABILITY_UNAVAILABLE', 'The source configuration is no longer readable.') }
   const server = servers[record.serverKey]
   if (!server || hash(stable(server)) !== record.fingerprint) throw fail('CAPABILITY_CHANGED', 'This server changed. Prepare the selection again.')
-  return normalize(server, record.format, true)
+  return server
+}
+
+// Raw values stay in the worker. The panel receives only field names and local
+// variant numbers, never credential values or fingerprints derived from them.
+function mcpComparisonFields(server, config) {
+  const timeouts = [config.startupTimeoutMs ?? null, config.requestTimeoutMs ?? null]
+  if (config.command) return {
+    timeouts,
+    transport: 'stdio', command: config.command, arguments: config.args,
+    environment: [config.env, [...new Set(server.env_vars ?? [])].sort()], workingDirectory: config.cwd ?? null,
+  }
+  return {
+    timeouts, transport: 'http', endpoint: config.url,
+    authentication: [config.headers, server.env_http_headers ?? {}, server.bearer_token_env_var ?? null],
+  }
+}
+export async function inspectMcpFields(record) {
+  const server = await readMcpSource(record)
+  return mcpComparisonFields(server, normalize(server, record.format))
 }

@@ -7,12 +7,27 @@ const fail = (code, message) => new ToolboxError(code, message)
 const MAX_MESSAGE = 4 * 1024 * 1024
 const PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18'])
 
+// Pass only OS execution basics plus variables explicitly approved in the
+// selected server definition. The Orca worker may hold unrelated credentials.
+const inheritedKeys = process.platform === 'win32'
+  ? ['APPDATA', 'HOMEDRIVE', 'HOMEPATH', 'LOCALAPPDATA', 'PATH', 'PROCESSOR_ARCHITECTURE', 'PROGRAMFILES', 'SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP', 'TMP', 'USERNAME', 'USERPROFILE']
+  : ['HOME', 'LOGNAME', 'PATH', 'SHELL', 'TERM', 'TMPDIR', 'USER']
+
+function serverEnvironment(declared) {
+  const base = {}
+  for (const key of inheritedKeys) {
+    const value = process.env[key]
+    if (value !== undefined && !value.startsWith('()')) base[key] = value
+  }
+  return { ...base, ...declared }
+}
+
 // A connection belongs to exactly one bundle. No model, workspace, or account state is shared.
 export class McpClient {
   constructor(config, options = {}) {
     this.config = config
-    this.startupTimeout = Math.max(1, Math.min(options.startupTimeoutMs ?? 20_000, 30_000))
-    this.requestTimeout = Math.max(1, Math.min(options.requestTimeoutMs ?? 60_000, 60_000))
+    this.startupTimeout = Math.max(1, Math.min(options.startupTimeoutMs ?? config.startupTimeoutMs ?? 20_000, config.startupTimeoutMs ?? 30_000, 30_000))
+    this.requestTimeout = Math.max(1, Math.min(options.requestTimeoutMs ?? config.requestTimeoutMs ?? 60_000, config.requestTimeoutMs ?? 60_000, 60_000))
     this.pending = new Map()
     this.sequence = 0
     this.closed = false
@@ -40,7 +55,7 @@ export class McpClient {
     const c = this.config
     if (typeof c.command !== 'string' || !c.command || (c.args && (!Array.isArray(c.args) || c.args.some(x => typeof x !== 'string')))) throw fail('INVALID_SERVER', 'The selected server command is invalid.')
     this.process = spawn(c.command, c.args ?? [], {
-      cwd: c.cwd, env: { ...process.env, ...(c.env ?? {}) }, shell: false,
+      cwd: c.cwd, env: serverEnvironment(c.env), shell: false,
       stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true
     })
     this.process.stderr.resume() // Never retain or forward server diagnostics: they may contain credentials.

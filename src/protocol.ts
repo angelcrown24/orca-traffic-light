@@ -1,6 +1,6 @@
 import type { NativeResult } from './native-reader'
 import type { ResourceObservation } from './resource-classifier'
-import type { ToolboxCatalog, ToolboxState, SyncResult } from './toolbox-types'
+import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison } from './toolbox-types'
 export type Call = { id: string; tool: string; agent: string; state: 'running' | 'finished' | 'uncertain' }
 export {}
 declare module 'orca' {
@@ -12,7 +12,8 @@ declare module 'orca' {
     'toolbox.revoke': { input: { workspaceId: string; bundleId: string }; output: ToolboxState }
     'toolbox.copy': { input: { workspaceId: string; bundleId: string }; output: { copied: boolean } }
     'toolbox.automation': { input: { workspaceId: string; enabled: boolean }; output: ToolboxState }
-    'toolbox.sync': { input: { workspaceId: string; ids: string[] }; output: { results: SyncResult[]; catalog: ToolboxCatalog } }
+    'toolbox.compare': { input: { id: string }; output: ToolboxComparison }
+    'toolbox.sync': { input: { workspaceId: string; ids: string[]; preserveProviderCopies?: boolean }; output: { results: SyncResult[]; catalog: ToolboxCatalog } }
     'native.get': { output: NativeResult }
     'calls.get': { output: { calls: Call[]; workspace: boolean; resources?: ResourceObservation[]; activeResources?: ResourceObservation[] } }
   }

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 class SafeError extends Error {}
 const usage =
-  'Usage: node auto-cli.mjs search "keywords" | start | --session HANDLE search "keywords"|skill ID|tools ID|call ID TOOL|reconnect ID|end. Send call arguments as JSON on stdin.'
+  'Usage: node auto-cli.mjs recommend "task" | search "keywords" | start | --session HANDLE recommend "task"|search "keywords"|skill ID|tools ID|call ID TOOL|reconnect ID|end. Send call arguments as JSON on stdin.'
 async function input() {
   if (process.stdin.isTTY) return {}
   const chunks = []
@@ -36,9 +36,9 @@ async function main() {
       throw new SafeError('The conversation session handle is invalid.')
   }
   const [op, id, tool] = args
-  const count = { start: 1, end: 1, search: 2, skill: 2, tools: 2, reconnect: 2, call: 3 }[op]
+  const count = { start: 1, end: 1, search: 2, recommend: 2, skill: 2, tools: 2, reconnect: 2, call: 3 }[op]
   if (!count || args.length !== count || (op === 'start' && session)) throw new SafeError(usage)
-  if (!session && !['start', 'search'].includes(op))
+  if (!session && !['start', 'search', 'recommend'].includes(op))
     throw new SafeError(
       'Run start once in this conversation and use its returned --session handle.'
     )
@@ -79,7 +79,7 @@ async function main() {
     op,
     cwd,
     ...(session ? { session } : {}),
-    ...(op === 'search' ? { query: id } : id ? { id } : {}),
+    ...(op === 'search' || op === 'recommend' ? { query: id } : id ? { id } : {}),
     ...(tool ? { tool, arguments: await input() } : {})
   }
   let response

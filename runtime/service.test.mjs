@@ -179,3 +179,27 @@ test('CLI end-to-end returns selected inventory, reads skills, lists tools, and 
   const failure = await run(['tools', 'not-selected']); assert.equal(failure.code, 1); assert.match(failure.stderr, /NOT_SELECTED/)
   assert.ok(!(list.stdout + result.stdout + failure.stderr).includes(bundle.token))
 })
+
+test('a real stdio server receives declared and baseline environment but not other worker variables', async t => {
+  const { resolveRecord, scanCatalog } = await import('./catalog.mjs')
+  const home = await mkdtemp(join(tmpdir(), 'toolbox-child-env-'))
+  t.after(() => rm(home, { recursive: true, force: true }))
+  const { mkdir } = await import('node:fs/promises')
+  await mkdir(join(home, '.codex'))
+  process.env.TL_CHILD_DECLARED_TEST = 'allow'
+  process.env.TL_CHILD_UNLISTED_TEST = 'private'
+  t.after(() => { delete process.env.TL_CHILD_DECLARED_TEST; delete process.env.TL_CHILD_UNLISTED_TEST })
+  const program = fake.replace('count:++count,args:req.params.arguments', "path:!!process.env.PATH, inherited:process.env.TL_CHILD_DECLARED_TEST, explicit:process.env.TL_CHILD_EXPLICIT_TEST, unrelated:'TL_CHILD_UNLISTED_TEST' in process.env")
+  await writeFile(join(home, 'server.cjs'), program)
+  await writeFile(join(home, '.codex/config.toml'), [
+    '[mcp_servers.sample]', 'command = ' + JSON.stringify(process.execPath), 'args = [' + JSON.stringify(join(home, 'server.cjs')) + ']',
+    'env_vars = ["TL_CHILD_DECLARED_TEST"]', 'env = { TL_CHILD_EXPLICIT_TEST = "explicit" }',
+  ].join('\n'))
+  const { items, records } = await scanCatalog({ home })
+  const selected = records.get(items[0].id)
+  const service = await createToolboxService({ resolveRecord })
+  t.after(() => service.close())
+  const bundle = await service.prepare({ workspaceId: 'local', records: [selected] })
+  const result = await request(bundle, { op: 'call', id: selected.id, tool: 'counter', arguments: {} })
+  assert.deepEqual(JSON.parse(result.result.content[0].text), { path: true, inherited: 'allow', explicit: 'explicit', unrelated: false })
+})

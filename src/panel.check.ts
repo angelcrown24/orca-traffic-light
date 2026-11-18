@@ -16,6 +16,10 @@ const requests = {
 export default defineCheck({
   fresh: {},
   library: { requests, persisted: { workspace: { 'traffic-light.tab': 'library' } } },
+  import: { requests: { ...requests, 'toolbox.catalog': () => ({ ...catalog, items: [
+    ...catalog.items, { ...catalog.items[1], id: 'figma-other', providers: ['Gemini CLI'] },
+    { ...catalog.items[1], id: 'blender', name: 'blender', providers: ['Claude Code'] }
+  ] }) }, persisted: { workspace: { 'traffic-light.tab': 'library', 'traffic-light.library-view': 'import' } } },
   instructions: { requests: { ...requests, 'toolbox.state': () => ({ ...selection, bundle: { id: 'demo-bundle', names: ['ui-ux-pro-max', 'figma-local'], createdAt: 1700000000000, instructions: 'Use only this selected bundle for the task.\nRead a skill or list one server’s tools only when needed.\nnode toolbox-cli.mjs --bundle selected.json list' } }) }, persisted: { workspace: { 'traffic-light.tab': 'library', 'traffic-light.manual-open': true } } },
   structure: { requests, persisted: { workspace: { 'traffic-light.tab': 'structure' } } },
   libraryEmpty: { requests: { ...requests, 'toolbox.catalog': () => ({ items: [], warnings: [] }), 'toolbox.state': () => ({ ...selection, selected: [], automation: { enabled: false, setup: false, providers: [], sessions: 0 } }) }, persisted: { workspace: { 'traffic-light.tab': 'library' } } },

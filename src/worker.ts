@@ -44,6 +44,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('toolbox.revoke', toolbox.revoke)
   orca.panels.handle('toolbox.copy', toolbox.copy)
   orca.panels.handle('toolbox.automation', toolbox.setAutomation)
+  orca.panels.handle('toolbox.compare', toolbox.compare)
   orca.panels.handle('toolbox.sync', toolbox.sync)
   void toolbox.initialize()
   const terminals = new Map<string, Map<string, ObservedCall>>()

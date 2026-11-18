@@ -152,3 +152,29 @@ test('supports a symlinked home and provider skill roots that resolve to the sam
   assert.equal(current.items[0].sharing.state, 'shared')
   assert.equal((await syncCapabilities({ ids: [current.items[0].id], home: alias })).results[0].status, 'unchanged')
 })
+
+test('explicit source choice preserves competing provider copies and pins only the chosen skill as shared', async t => {
+  const f = await fixture(t)
+  await f.put('.codex/skills/sample/SKILL.md', skill('sample'))
+  const other = await f.put('.gemini/skills/sample/SKILL.md', skill('sample') + 'Variant')
+  const origin = (await f.scan()).items.find(item => item.providers.includes('Codex'))
+  const add = ids => syncCapabilities({ ids, home: f.home, preserveProviderCopies: true })
+  assert.equal((await add([origin.id])).results[0].status, 'synced')
+  const baseline = await f.scan()
+  assert.equal(baseline.items.filter(item => item.sharing.state === 'shared').length, 1)
+  assert.equal(await readFile(other, 'utf8'), skill('sample') + 'Variant')
+  const competing = baseline.items.find(item => item.sharing.state === 'provider')
+  assert.equal((await add([competing.id])).results[0].status, 'conflict')
+  assert.equal(await readFile(join(f.home, '.agents/skills/sample/SKILL.md'), 'utf8'), skill('sample'))
+})
+
+test('stale imports of competing MCP sources keep only the first chosen shared variant', async t => {
+  const f = await fixture(t)
+  await f.put('.codex/config.toml', '[mcp_servers.sample]\ncommand = "node"\nargs = ["original"]')
+  await f.put('.gemini/settings.json', { mcpServers: { sample: { command: 'node', args: ['second'] } } })
+  const sources = (await f.scan()).items
+  const add = id => syncCapabilities({ ids: [id], home: f.home, preserveProviderCopies: true })
+  assert.equal((await add(sources[0].id)).results[0].status, 'synced')
+  assert.equal((await add(sources[1].id)).results[0].status, 'conflict')
+  assert.deepEqual(Object.keys((await readSharedRegistry(f.home)).mcp), [sources[0].id])
+})
