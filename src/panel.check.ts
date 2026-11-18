@@ -16,13 +16,17 @@ const requests = {
 }
 export default defineCheck({
   fresh: { requests },
-  recommendations: { requests: { ...requests, 'toolbox.activity': () => ({
+  jevBadges: { requests: { ...requests, 'toolbox.activity': () => ({
     workspaceId: 'demo',
     recommendations: [
       { id: 'rec-a', name: 'ui-ux-pro-max', kind: 'skill', at: 1700000000020 },
       { id: 'rec-b', name: 'figma-local', kind: 'mcp', at: 1700000000010 }
     ],
-    events: [{ id: 'read-a', bundleId: 'demo', name: 'ui-ux-pro-max', kind: 'skill', operation: 'skill', recommendationId: 'rec-a', state: 'succeeded', startedAt: 1700000000030 }]
+    events: [
+      { id: 'read-a', bundleId: 'demo', capabilityName: 'ui-ux-pro-max', name: 'ui-ux-pro-max', kind: 'skill', operation: 'skill', recommendationId: 'rec-a', state: 'running', startedAt: 1700000000030 },
+      { id: 'call-b', bundleId: 'demo', capabilityName: 'figma-local', name: 'figma-local · get_selection', kind: 'mcp', operation: 'call', recommendationId: 'rec-b', state: 'succeeded', startedAt: 1700000000040 },
+      { id: 'read-c', bundleId: 'demo', capabilityName: 'code-review', name: 'code-review', kind: 'skill', operation: 'skill', state: 'succeeded', startedAt: 1700000000050 }
+    ]
   }) } },
   library: { requests, persisted: { workspace: { 'traffic-light.tab': 'library' } } },
   import: { requests: { ...requests, 'toolbox.catalog': () => ({ ...catalog, items: [

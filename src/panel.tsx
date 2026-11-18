@@ -1,6 +1,5 @@
 import { atom, Badge, Box, Button, Collapsible, env, Heading, on, plugin, read, Row, Separator, set, settings, Stack, Switch, Tab, Tabs, Text, type PanelContext } from 'orca'
 import type { Call } from './protocol'
-import { isJevLookup, RecommendationActivity } from './recommendation-activity'
 import type { ToolboxActivity } from './toolbox-types'
 import type { NativeToolCall } from './native-reader'
 import type { NativeActivity } from './native-activity'
@@ -137,9 +136,9 @@ const labels = {
     empty: 'An empty list does not mean an item was unused.', inUse: 'In use',
     agent: 'Agent activity', subagents: 'Subagents', subagent: 'Subagent', agentNone: 'No agent activity reported.', agentOff: 'Turn on chat activity in settings to see agent status.', unavailable: 'Could not load chat activity.',
     truncated: 'Only recent chat history is shown.', historyUnavailable: 'Recent chat history is unavailable.',
-    toolCalls: 'Recent tool calls', nativeCalls: 'Native chats', sharedCalls: 'Shared runner', terminalCalls: 'Terminals', callInProgress: 'Running', callDone: 'Completed', callFailed: 'Failed', nativeChat: 'Chat', jevLookup: 'Jev lookup',
+    toolCalls: 'Recent tool calls', nativeCalls: 'Native chats', sharedCalls: 'Shared runner', terminalCalls: 'Terminals', callInProgress: 'Running', callDone: 'Completed', callFailed: 'Failed', nativeChat: 'Chat',
     toolNone: 'No tool calls observed yet.', noWorkspace: 'Open a workspace to see activity.',
-    loading: 'Loading activity…', failed: 'Could not load tool calls.', retry: 'Retry',
+    loading: 'Loading activity…', failed: 'Could not load tool calls.', sharedError: 'Could not load shared runner activity.', retry: 'Retry',
     settings: 'Settings & privacy', setting: 'Show chat activity',
     privacy: 'When on, workspace status can include prompts, tool inputs and replies from all workspaces. On macOS, recent tool inputs in this workspace are also read.',
     privacyMore: 'How activity is read',
@@ -155,9 +154,9 @@ const labels = {
     empty: '목록에 없어도 설치했거나 사용했을 수 있습니다.', inUse: '현재 사용 중',
     agent: '에이전트 활동', subagents: '서브에이전트', subagent: '서브에이전트', agentNone: '보고된 에이전트 활동이 없습니다.', agentOff: '설정에서 채팅 활동을 켜면 상태를 볼 수 있습니다.', unavailable: '채팅 활동을 불러오지 못했습니다.',
     truncated: '최근 채팅 기록 일부만 표시합니다.', historyUnavailable: '최근 채팅 기록을 불러올 수 없습니다.',
-    toolCalls: '최근 도구 호출', nativeCalls: '네이티브 채팅', sharedCalls: '공용 실행기', terminalCalls: '터미널', callInProgress: '실행 중', callDone: '완료', callFailed: '실패', nativeChat: '채팅', jevLookup: 'Jev 조회',
+    toolCalls: '최근 도구 호출', nativeCalls: '네이티브 채팅', sharedCalls: '공용 실행기', terminalCalls: '터미널', callInProgress: '실행 중', callDone: '완료', callFailed: '실패', nativeChat: '채팅',
     toolNone: '관측된 도구 호출이 없습니다.', noWorkspace: '작업공간을 열어 활동을 확인하세요.',
-    loading: '활동을 불러오는 중…', failed: '도구 호출을 불러오지 못했습니다.', retry: '다시 시도',
+    loading: '활동을 불러오는 중…', failed: '도구 호출을 불러오지 못했습니다.', sharedError: '공용 실행기 활동을 불러오지 못했습니다.', retry: '다시 시도',
     settings: '설정 및 개인정보', setting: '채팅 활동 표시',
     privacy: '켜면 모든 작업공간의 상태에 포함된 프롬프트·도구 입력·응답을 읽습니다. macOS에서는 현재 작업공간의 최근 도구 입력도 읽습니다.',
     privacyMore: '어떤 정보를 읽나요?',
@@ -168,31 +167,23 @@ const labels = {
   }
 } as const
 
-// A direct lookup proves Jev was asked. Only the shared runner can attribute returned candidates.
-function sourceLabel(provider: string, name: string, lookup: string) {
-  return isJevLookup(name)
-    ? provider + ' · ' + lookup : provider
-}
-
 function ActivityPanel() {
   const t = env.locale.toLowerCase().startsWith('ko') ? labels.ko : labels.en
   const items = read(calls)
   const snapshot = read(sharedActivity)
   const journalCalls = read(nativeTools)
-  const nativeLookup = journalCalls.find(call => isJevLookup(call.name))
-  const terminalLookup = items.find(call => isJevLookup(call.tool))
-  const direct = nativeLookup ? { name: nativeLookup.name, provider: nativeLookup.agentType ?? t.nativeChat, at: nativeLookup.observedAt }
-    : terminalLookup ? { name: terminalLookup.tool, provider: terminalLookup.agent } : undefined
   const runnerCalls = (snapshot?.events ?? []).filter(event => event.operation === 'call')
     .sort((a, b) => b.startedAt - a.startedAt).slice(0, 30)
   const recentCount = items.length + journalCalls.length + runnerCalls.length
   const resources = new Map<string, ResourceObservation>()
   const activeResources = [...read(terminalActiveResources), ...read(nativeActiveResources)]
   const activeKeys = new Set(activeResources.map((item) => `${item.category}:${item.name}`))
+  const jevKeys = new Set<string>()
   for (const event of snapshot?.events ?? []) {
     if (!event.capabilityName || (event.operation !== 'call' && event.operation !== 'skill')) continue
     const key = event.kind + ':' + event.capabilityName
     resources.set(key, { category: event.kind, name: event.capabilityName, evidence: 'observed' })
+    if (event.recommendationId) jevKeys.add(key)
     if (event.state === 'running') activeKeys.add(key)
   }
   for (const item of [...read(terminalResources), ...read(nativeResources), ...activeResources]) {
@@ -223,8 +214,6 @@ function ActivityPanel() {
       </Row>
     </Stack>
 
-    <RecommendationActivity direct={direct} snapshot={snapshot} unavailable={read(sharedUnavailable)} />
-
     <Stack gap="sm">
       <Heading level={2}>{t.detected}</Heading>
       <Text muted size="xs">{t.detectedHelp}</Text>
@@ -239,6 +228,7 @@ function ActivityPanel() {
             {found.length === 0 ? <Text muted size="xs">{t.none}</Text> : found.map((resource) =>
               <Row key={`${resource.category}:${resource.name}`} align="center" justify="between" gap="sm" wrap>
                 <Box minWidth={0} grow><Text size="sm" truncate>{resource.name}</Text></Box>
+                {jevKeys.has(`${resource.category}:${resource.name}`) ? <Badge tone="neutral">Jev</Badge> : null}
                 {activeKeys.has(`${resource.category}:${resource.name}`) ? <Badge tone="accent">{t.inUse}</Badge> : null}
               </Row>)}
           </Stack>
@@ -262,7 +252,10 @@ function ActivityPanel() {
       {read(journalStatus) === 'truncated' ? <Text muted size="xs">{t.truncated}</Text> : read(journalStatus) === 'unavailable' ? <Text muted size="xs">{t.historyUnavailable}</Text> : null}
     </Stack>
 
-    {read(failed) ? <Row gap="sm" align="center" wrap><Text tone="danger">{t.failed}</Text><Button size="sm" onPress={refresh}>{t.retry}</Button></Row> : null}
+    {read(failed) || read(sharedUnavailable) ? <Row gap="sm" align="center" wrap>
+      <Text tone="danger">{read(failed) ? t.failed : t.sharedError}</Text>
+      <Button size="sm" onPress={read(failed) ? refresh : refreshShared}>{t.retry}</Button>
+    </Row> : null}
     <Separator />
     <Collapsible title={`${t.toolCalls} · ${recentCount}`}>
       <Stack gap="sm">
@@ -270,7 +263,7 @@ function ActivityPanel() {
         {journalCalls.length ? <Stack gap="xs">
           <Text size="sm" weight="semibold">{t.nativeCalls}</Text>
           {journalCalls.map(call => <Row key={call.id} justify="between" align="center" gap="sm" wrap>
-            <Box direction="column" gap="xs" minWidth={0} grow><Text size="sm" truncate>{call.name}</Text><Text muted size="xs">{sourceLabel(call.agentType ?? t.nativeChat, call.name, t.jevLookup)}</Text></Box>
+            <Box direction="column" gap="xs" minWidth={0} grow><Text size="sm" truncate>{call.name}</Text><Text muted size="xs">{call.agentType ?? t.nativeChat}</Text></Box>
             <Badge tone={call.state === 'running' ? 'accent' : call.state === 'failed' ? 'danger' : 'neutral'}>{({ running: t.callInProgress, completed: t.callDone, failed: t.callFailed, unknown: t.unverifiable })[call.state]}</Badge>
           </Row>)}
         </Stack> : null}
@@ -278,13 +271,14 @@ function ActivityPanel() {
           <Text size="sm" weight="semibold">{t.sharedCalls}</Text>
           {runnerCalls.map(call => <Row key={call.id} justify="between" align="center" gap="sm" wrap>
             <Box minWidth={0} grow><Text size="sm" truncate>{call.name}</Text></Box>
+            {call.recommendationId ? <Badge tone="neutral">Jev</Badge> : null}
             <Badge tone={call.state === 'running' ? 'accent' : call.state === 'failed' ? 'danger' : 'neutral'}>{({ running: t.callInProgress, succeeded: t.callDone, failed: t.callFailed })[call.state]}</Badge>
           </Row>)}
         </Stack> : null}
         {items.length ? <Stack gap="xs">
           <Text size="sm" weight="semibold">{t.terminalCalls}</Text>
           {items.map(call => <Row key={call.id} justify="between" align="center" gap="sm" wrap>
-            <Box direction="column" gap="xs" minWidth={0} grow><Text size="sm" truncate>{call.tool}</Text><Text muted size="xs">{sourceLabel(call.agent, call.tool, t.jevLookup)}</Text></Box>
+            <Box direction="column" gap="xs" minWidth={0} grow><Text size="sm" truncate>{call.tool}</Text><Text muted size="xs">{call.agent}</Text></Box>
             <Badge tone={call.state === 'running' ? 'warning' : 'neutral'}>{callNames[call.state]}</Badge>
           </Row>)}
           <Text muted size="xs">{t.toolDetail}</Text>

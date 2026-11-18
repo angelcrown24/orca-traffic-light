@@ -185,33 +185,47 @@ test('shows Korean labels and privacy disclosure beside the switch', async () =>
   } finally { await view.unmount() }
 })
 
-test('Jev shows ranked candidates separately from confirmed reads and calls with chat monitoring disabled', async () => {
+test('marks only Jev-linked uses in existing resource and call rows, and clears them on workspace change', async () => {
   let workspaceId = 'first'
   const host = mockHost({ settings: { nativeActivity: false }, requests: {
     'calls.get': () => ({ workspace: true, calls: [] }),
     'toolbox.activity': () => workspaceId === 'first' ? { workspaceId, recommendations: [
-      { id: 'read', name: 'design', kind: 'skill', at: 1700000000000 },
-      { id: 'list', name: 'maps', kind: 'mcp', at: 1700000000010 },
-      { id: 'use', name: 'graphics', kind: 'mcp', at: 1700000000020 }
+      { id: 'rec-skill', name: 'design', kind: 'skill', at: 1 },
+      { id: 'rec-list', name: 'maps', kind: 'mcp', at: 2 },
+      { id: 'rec-mcp', name: 'graphics', kind: 'mcp', at: 3 },
+      { id: 'rec-unused', name: 'unused-skill', kind: 'skill', at: 4 }
     ], events: [
-      { id: 'e1', bundleId: 'a', recommendationId: 'read', name: 'design', kind: 'skill', operation: 'skill', state: 'succeeded', startedAt: 1700000000030 },
-      { id: 'e2', bundleId: 'a', recommendationId: 'list', name: 'maps', kind: 'mcp', operation: 'tools', state: 'succeeded', startedAt: 1700000000040 },
-      { id: 'e3', bundleId: 'a', recommendationId: 'use', name: 'graphics · draw', kind: 'mcp', operation: 'call', state: 'failed', startedAt: 1700000000050 },
-      { id: 'other', bundleId: 'b', capabilityName: 'other-server', name: 'other-server · unrelated', kind: 'mcp', operation: 'call', state: 'succeeded', startedAt: 1700000000060 }
+      { id: 'read', bundleId: 'a', recommendationId: 'rec-skill', capabilityName: 'design', name: 'design', kind: 'skill', operation: 'skill', state: 'running', startedAt: 5 },
+      { id: 'list', bundleId: 'a', capabilityName: 'maps', name: 'maps', kind: 'mcp', operation: 'tools', state: 'succeeded', startedAt: 6 },
+      { id: 'linked-call', bundleId: 'a', recommendationId: 'rec-mcp', capabilityName: 'graphics', name: 'graphics · draw', kind: 'mcp', operation: 'call', state: 'failed', startedAt: 7 },
+      { id: 'direct-call', bundleId: 'b', capabilityName: 'graphics', name: 'graphics · draw', kind: 'mcp', operation: 'call', state: 'succeeded', startedAt: 8 },
+      { id: 'direct-read', bundleId: 'b', capabilityName: 'review', name: 'review', kind: 'skill', operation: 'skill', state: 'succeeded', startedAt: 9 }
     ] } : { workspaceId, recommendations: [], events: [] }
   } })
   const view = await mount(panel, { host, locale: 'ko-KR' })
   try {
-    for (const text of ['Jev 추천', 'other-server', 'design', '읽음', 'maps', '추천됨', 'graphics · draw', '호출 실패']) {
-      assert.ok(view.find({ text }), text)
-    }
-    assert.equal(view.find({ text: 'other-server · unrelated' }), null)
-    assert.equal(view.find({ text: '현재 사용 중' }), null)
+    assert.equal(view.find({ text: 'Jev 추천' }), null)
+    assert.equal(view.find({ text: 'unused-skill' }), null)
+    assert.equal(view.find({ text: 'maps' }), null)
+    const skillRow = view.find({ type: 'Row', text: /^design/ })
+    assert.ok(skillRow?.text.includes('Jev'))
+    assert.ok(skillRow?.text.includes('현재 사용 중'))
+    assert.ok(view.find({ type: 'Row', text: /^graphics/ })?.text.includes('Jev'))
+    assert.equal(view.find({ type: 'Row', text: 'review' })?.text, 'review')
+    const badges = view.findAll({ type: 'Badge', text: 'Jev' })
+    assert.equal(badges.length, 2)
+    assert.ok(badges.every(badge => badge.props.tone === 'neutral'))
     await view.toggle({ label: '최근 도구 호출 · 2' })
-    assert.ok(view.find({ text: 'other-server · unrelated' }))
+    const linkedCall = view.find({ type: 'Row', text: /^graphics · draw.*실패/ })
+    assert.ok(linkedCall?.text.includes('Jev'))
+    assert.ok(linkedCall?.text.includes('실패'))
+    const directCall = view.find({ type: 'Row', text: /^graphics · draw.*완료/ })
+    assert.ok(directCall?.text.includes('완료'))
+    assert.equal(directCall?.text.includes('Jev'), false)
+    assert.equal(view.findAll({ type: 'Badge', text: 'Jev' }).length, 3)
     workspaceId = 'second'
     await view.emit('workspace.changed', { context: null })
-    assert.equal(view.find({ text: 'graphics · draw' }), null)
+    assert.equal(view.find({ text: 'Jev' }), null)
     assert.equal(view.find({ text: 'design' }), null)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
@@ -235,12 +249,11 @@ test('hidden activity refreshes its workspace history on return and shows provid
     await view.post('toolbox.changed', {})
     assert.equal(reads, 1)
     await view.emit('workspace.changed', { context: null })
-    assert.ok(view.find({ label: 'Direct Jev lookup · jev-code/rank' }))
-    await view.toggle({ label: 'Direct Jev lookup · jev-code/rank' })
-    assert.ok(view.find({ text: 'The agent called Jev directly. The returned candidates are unavailable for this call.' }))
-    assert.equal(view.find({ text: 'Suggested' }), null)
+    assert.equal(view.find({ label: /Jev/ }), null)
+    assert.equal(view.find({ text: 'jev-code/rank' }), null)
     await view.toggle({ label: 'Recent tool calls · 2' })
-    assert.ok(view.find({ text: 'Antigravity · Jev lookup' }))
+    assert.ok(view.find({ text: 'jev-code/rank' }))
+    assert.equal(view.find({ type: 'Badge', text: 'Jev' }), null)
     assert.ok(view.find({ text: 'view_file' }))
     assert.ok(view.find({ text: 'Antigravity' }))
     assert.ok(view.find({ text: 'Completed' }))
