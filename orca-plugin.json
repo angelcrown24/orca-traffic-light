@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "traffic-light",
   "name": "Traffic Light",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Observe agent activity, sync shared capabilities, and connect agents on demand.",
   "license": "MIT-0",
   "engines": {

@@ -10,11 +10,20 @@ const catalog: ToolboxCatalog = { items: [
 const selection: ToolboxState = { workspaceId: 'demo', selected: ['design', 'figma'], bundle: null, events: [{ id: 'sample-call', bundleId: 'sample-session', name: 'figma-local', kind: 'mcp', state: 'running', startedAt: 1700000000000 }], automation: { enabled: true, setup: true, providers: [{ name: 'Codex', state: 'ready' }, { name: 'Gemini', state: 'ready' }, { name: 'Claude', state: 'ready' }], appliedIds: ['design'], sessions: 1 } }
 const requests = {
   'calls.get': () => ({ workspace: true, calls: [] }),
+  'toolbox.activity': () => ({ workspaceId: 'demo', recommendations: [], events: [] }),
   'toolbox.catalog': () => catalog,
   'toolbox.state': () => selection,
 }
 export default defineCheck({
-  fresh: {},
+  fresh: { requests },
+  recommendations: { requests: { ...requests, 'toolbox.activity': () => ({
+    workspaceId: 'demo',
+    recommendations: [
+      { id: 'rec-a', name: 'ui-ux-pro-max', kind: 'skill', at: 1700000000020 },
+      { id: 'rec-b', name: 'figma-local', kind: 'mcp', at: 1700000000010 }
+    ],
+    events: [{ id: 'read-a', bundleId: 'demo', name: 'ui-ux-pro-max', kind: 'skill', operation: 'skill', recommendationId: 'rec-a', state: 'succeeded', startedAt: 1700000000030 }]
+  }) } },
   library: { requests, persisted: { workspace: { 'traffic-light.tab': 'library' } } },
   import: { requests: { ...requests, 'toolbox.catalog': () => ({ ...catalog, items: [
     ...catalog.items, { ...catalog.items[1], id: 'figma-other', providers: ['Gemini CLI'] },

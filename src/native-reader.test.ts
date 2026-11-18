@@ -146,3 +146,34 @@ test('active resources follow the working agent turn and clear after it finishes
   assert.deepEqual(finished.activeResources, [])
   assert.equal(finished.resources.some((item) => item.name === 'current'), true)
 })
+
+test('uses an exact workspace returned on a truncated page and reports unavailability when it is missing', async () => {
+  let workspace = 'one'
+  const read = createNativeReader(async () => true, async () => workspace, async () => ({
+    result: { truncated: true, worktrees: [{ worktreeId: 'one', agents: [{ agentType: 'gemini', state: 'working', toolName: 'read_file' }] }] }
+  }))
+  const found = await read()
+  assert.equal(found.activities[0].toolName, 'read_file')
+  workspace = 'two'
+  assert.equal((await read()).status, 'unavailable')
+})
+
+test('retains the latest native call from a quiet session while filling the rest by timestamp', async () => {
+  const busy = 'codex_12345678_abcd_1234_abcd_123456789abc'
+  const quiet = '12345678-abcd-4123-9123-123456789abc'
+  const agents = [[busy, 'codex'], [quiet, 'antigravity']].map(([id, agentType]) => ({
+    orcaSessionId: id, paneKey: 'structured-agent-session-' + id + ':pane', agentType, state: 'done'
+  }))
+  const read = createNativeReader(async () => true, async () => 'one', async () => ({
+    result: { worktrees: [{ worktreeId: 'one', hostId: 'local', agents }] }
+  }), async id => ({
+    status: 'ready', resources: [],
+    recentTools: (id === busy ? Array.from({ length: 30 }, (_, i) => 100 + i) : [1, 2]).map(observedAt => ({
+      id: id + ':' + observedAt, observedAt, name: 'read_file', state: 'completed'
+    }))
+  }))
+  const tools = (await read()).recentTools!
+  assert.equal(tools.length, 30)
+  assert.deepEqual(tools.map(t => t.observedAt), [...Array.from({ length: 29 }, (_, i) => 129 - i), 2])
+  assert.equal(tools[29].agentType, 'antigravity')
+})

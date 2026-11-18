@@ -1,15 +1,16 @@
 import { execFile } from 'node:child_process'
-import { classifyResources, type ResourceObservation } from './resource-classifier'
+import { validSessionId } from './native-activity'
+import { classifyResources, nativeToolName, type ResourceObservation } from './resource-classifier'
 
 /** Internal Orca journal schema and privacy boundary: no raw inputs leave this module. */
-export type JournalResult = { status: 'ready' | 'unavailable' | 'truncated'; resources: ResourceObservation[]; activeResources?: ResourceObservation[] }
+export type JournalToolCall = { id: string; name: string; observedAt: number; state: 'running' | 'completed' | 'failed' | 'unknown' }
+export type JournalResult = { recentTools?: JournalToolCall[]; status: 'ready' | 'unavailable' | 'truncated'; resources: ResourceObservation[]; activeResources?: ResourceObservation[] }
 type Query = (sql: string) => Promise<unknown>
-const SESSION_ID = /^[a-z][a-z0-9-]{0,31}_[a-f0-9]{8}_[a-f0-9]{4}_[a-f0-9]{4}_[a-f0-9]{4}_[a-f0-9]{12}$/
 const MAX_CALLS = 300
 
 /** Do not accept a path, quote, or arbitrary SQL as an identifier. */
 export function journalQuery(sessionId: string): string | null {
-  if (!SESSION_ID.test(sessionId)) return null
+  if (!validSessionId(sessionId)) return null
   // sessionId is strictly validated before interpolation. SQLite JSON extracts only the
   // tool name and a bounded input; messages and tool outputs never reach the worker.
   return `WITH current AS (
@@ -20,21 +21,32 @@ export function journalQuery(sessionId: string): string | null {
       AND hidden=0 AND root=1 AND kind='turn' AND turn_marker=1
     ORDER BY sequence DESC, sequence_index DESC, ordinal DESC LIMIT 1
   ), calls AS (
-    SELECT payload_json, sequence, sequence_index, turn_item_id, root, producer_agent_id FROM journal_items
+    SELECT payload_json, sequence, sequence_index, turn_item_id, root, producer_agent_id, lifecycle_state FROM journal_items
     WHERE session_id='${sessionId}' AND epoch=(SELECT epoch FROM current)
       AND kind='tool-call' AND hidden=0 AND (SELECT user_version FROM pragma_user_version)=2
     ORDER BY sequence DESC, sequence_index DESC LIMIT ${MAX_CALLS + 1}
   )
   SELECT 'meta' AS kind, (SELECT user_version FROM pragma_user_version) AS version,
     (SELECT count(*) FROM current) AS format, NULL AS name, NULL AS input, NULL AS active,
-    NULL AS mcp_server, NULL AS mcp_tool, NULL AS is_root, NULL AS producer
+    NULL AS mcp_server, NULL AS mcp_tool, NULL AS is_root, NULL AS producer,
+    NULL AS seq, NULL AS idx, NULL AS at_ms, NULL AS state
   UNION ALL
   SELECT 'call', NULL, NULL, substr(json_extract(payload_json,'$.body.name'),1,256),
-    substr(json_extract(payload_json,'$.body.input'),1,8192),
+    -- Prefer a single structured read path or command. Truncating an entire JSON
+    -- object mid-string otherwise drops valid skill references from long previews.
+    CASE WHEN json_type(payload_json,'$.body.input')='object' AND lower(json_extract(payload_json,'$.body.name')) IN
+      ('bash','shell','execute','terminal','run_command','run_shell_command','exec_command','functions.exec_command','functions/exec_command')
+      THEN substr(coalesce(json_extract(payload_json,'$.body.input.command'),json_extract(payload_json,'$.body.input.cmd'),
+        json_extract(payload_json,'$.body.input.CommandLine'),json_extract(payload_json,'$.body.input.command_line')),1,8192)
+      ELSE substr(coalesce(json_extract(payload_json,'$.body.input.Path'), json_extract(payload_json,'$.body.input.path'),
+      json_extract(payload_json,'$.body.input.file_path'), json_extract(payload_json,'$.body.input.AbsolutePath'),
+      json_extract(payload_json,'$.body.input.absolute_path'), json_extract(payload_json,'$.body.input.command'),
+      json_extract(payload_json,'$.body.input.cmd'), json_extract(payload_json,'$.body.input')),1,8192) END,
     CASE WHEN (SELECT lifecycle_state FROM latest_turn)='running'
       AND turn_item_id=(SELECT item_id FROM latest_turn) THEN 1 ELSE 0 END,
-    substr(json_extract(payload_json,'$.body.mcpIdentity.server'),1,128),
-    substr(json_extract(payload_json,'$.body.mcpIdentity.tool'),1,256), root, producer_agent_id FROM calls;`
+    substr(coalesce(json_extract(payload_json,'$.body.mcpIdentity.server'), CASE WHEN json_extract(payload_json,'$.body.name')='execute' THEN json_extract(payload_json,'$.body.input.ServerName') END),1,128),
+    substr(coalesce(json_extract(payload_json,'$.body.mcpIdentity.tool'), CASE WHEN json_extract(payload_json,'$.body.name')='execute' THEN json_extract(payload_json,'$.body.input.ToolName') END),1,256),
+    root, producer_agent_id, sequence, sequence_index, json_extract(payload_json,'$.observedAt'), lifecycle_state FROM calls;`
 }
 
 /** Run only on macOS and only against the running user's local Orca journal, read-only. */
@@ -65,14 +77,22 @@ export async function readJournalActivity(sessionId: string, query: Query = quer
     const seen = new Set<string>()
     const activeSeen = new Set<string>()
     const activeResources: ResourceObservation[] = []
+    const recentTools: JournalToolCall[] = []
     for (const item of calls.slice(0, MAX_CALLS)) {
-      for (const resource of classifyResources(item.name, item.input, { server: item.mcp_server, tool: item.mcp_tool })) {
+      const owner = item.is_root === 1 || (item.is_root === 0 && typeof item.producer === 'string' && workingChildren.has(item.producer))
+      const active = item.active === 1 && owner
+      const identity = { server: item.mcp_server, tool: item.mcp_tool }
+      const name = nativeToolName(item.name, item.input, identity)
+      if (recentTools.length < 30 && name && Number.isSafeInteger(item.seq) && Number.isSafeInteger(item.idx) && Number.isSafeInteger(item.at_ms) && item.at_ms > 0) {
+        const state = item.state === 'completed' || item.state === 'failed' ? item.state : item.state === 'running' && active ? 'running' : 'unknown'
+        recentTools.push({ id: sessionId + ':' + item.seq + ':' + item.idx, name, observedAt: item.at_ms, state })
+      }
+      for (const resource of classifyResources(item.name, item.input, identity)) {
         const key = `${resource.category}:${resource.name}`
         if (!seen.has(key)) { seen.add(key); resources.push(resource) }
-        const activeOwner = item.is_root === 1 || (item.is_root === 0 && typeof item.producer === 'string' && workingChildren.has(item.producer))
-        if (item.active === 1 && activeOwner && !activeSeen.has(key)) { activeSeen.add(key); activeResources.push(resource) }
+        if (active && !activeSeen.has(key)) { activeSeen.add(key); activeResources.push(resource) }
       }
     }
-    return { status: calls.length > MAX_CALLS ? 'truncated' : 'ready', resources, activeResources }
+    return { status: calls.length > MAX_CALLS ? 'truncated' : 'ready', resources, activeResources, ...(recentTools.length ? { recentTools } : {}) }
   } catch { return { status: 'unavailable', resources: [] } }
 }

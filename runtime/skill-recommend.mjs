@@ -44,15 +44,15 @@ async function rankWithKev(task, items, origin, preferredModel) {
     !m.remote_model && !m.remote_host && m.capabilities?.includes('decision') &&
     (!preferredModel || m.name === preferredModel))
   if (!model) throw Error('No local Kev model')
-  const skills = {}, questions = {}
+  const capabilities = {}, questions = {}
   items.forEach((item, index) => {
     const key = 's' + index
-    skills[key] = item.name + ': ' + item.description
-    questions[key] = { type: 'noul', instructions: 'Would the instructions of `skills.' + key + '` directly help complete `task`? Judge only this skill.' }
+    capabilities[key] = (item.kind === 'skill' ? 'Skill: ' : 'MCP server: ') + item.name + '. ' + item.description
+    questions[key] = { type: 'noul', instructions: 'Would using `capabilities.' + key + '` directly help complete `task`? Judge only this capability.' }
   })
-  questions.any = { type: 'noul', instructions: 'Does at least one skill in `skills` directly help complete `task`?' }
+  questions.any = { type: 'noul', instructions: 'Does at least one approved capability in `capabilities` directly help complete `task`?' }
   const { answers } = await localJson(origin + '/v1/systemone', {
-    model: model.name, state: { task, skills }, questions
+    model: model.name, state: { task, capabilities }, questions
   }, 20000)
   function probability(key) {
     const answer = answers[key]
@@ -65,7 +65,7 @@ async function rankWithKev(task, items, origin, preferredModel) {
     .filter(match => match.score >= 0.65)
 }
 
-export async function recommendSkills(task, items, env = process.env) {
+export async function recommendCapabilities(task, items, env = process.env) {
   const origin = loopbackOrigin(env.TYPESAFE_BASE_URL)
   let ranked = [], method = 'keywords'
   if (items.length && origin) {

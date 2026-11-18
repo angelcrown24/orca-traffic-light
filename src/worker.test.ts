@@ -42,6 +42,21 @@ test('observes tool events without call IDs and pairs only a unique matching pen
   await worker.deactivate()
 })
 
+test('labels a direct Jev terminal lookup and still pairs the original shell hooks', async () => {
+  const context = { branch: '', displayName: '', terminals: [{ id: 't1' }] }
+  const worker = await mountWorker(main, { host: mockHost({ results: { 'workspace.readContext': context } }) })
+  const hook = { agent: 'gemini', workspaceId: null, terminalId: 't1', tool: 'Bash', callId: 'one' }
+  try {
+    await worker.hooks.fire('agent.tool.before', { ...hook, input: { command: 'jev-code rank private-query' } })
+    assert.equal((await worker.request('calls.get')).calls[0].tool, 'jev-code/rank')
+    await worker.hooks.fire('agent.tool.after', { ...hook, input: null })
+    const result = await worker.request('calls.get')
+    assert.equal(result.calls.length, 1)
+    assert.equal(result.calls[0].state, 'finished')
+    assert.equal(JSON.stringify(result).includes('private-query'), false)
+  } finally { await worker.deactivate() }
+})
+
 test('keeps unpaired endings visible without mixing terminals or retaining payloads', async () => {
   const context = { branch: '', displayName: '', terminals: [{ id: 't1' }] }
   const worker = await mountWorker(main, { host: mockHost({ results: { 'workspace.readContext': context } }) })

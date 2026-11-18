@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process'
-import { parseNativeActivity, parseNativeResources, parseNativeActiveResources, nativeSessionIds, nativeWorkingSessionIds, nativeWorkingChildIds, type NativeActivity } from './native-activity'
+import { parseNativeActivity, parseNativeResources, parseNativeActiveResources, nativeJournalSessions, missingFromPartialSnapshot, nativeWorkingChildIds, type NativeActivity } from './native-activity'
 import type { ResourceObservation } from './resource-classifier'
-import { readJournalActivity, type JournalResult } from './journal-activity'
+import { readJournalActivity, type JournalResult, type JournalToolCall } from './journal-activity'
 
-export type NativeResult = { status: 'disabled' | 'ready' | 'unavailable'; activities: NativeActivity[]; resources: ResourceObservation[]; activeResources?: ResourceObservation[]; journalStatus?: JournalResult['status'] }
+export type NativeToolCall = JournalToolCall & { agentType: string | null }
+export type NativeResult = { recentTools?: NativeToolCall[]; status: 'disabled' | 'ready' | 'unavailable'; activities: NativeActivity[]; resources: ResourceObservation[]; activeResources?: ResourceObservation[]; journalStatus?: JournalResult['status'] }
 type FetchSnapshot = () => Promise<unknown>
 type GetEnabled = () => Promise<boolean>
 type GetWorkspace = () => Promise<string | null>
@@ -29,8 +30,7 @@ export function fetchSnapshot(): Promise<unknown> {
       try {
         const result: unknown = JSON.parse(stdout)
         if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true || !('result' in result) ||
-          !result.result || typeof result.result !== 'object' || !('worktrees' in result.result) || !Array.isArray(result.result.worktrees) ||
-          ('truncated' in result.result && result.result.truncated === true)) throw new Error('invalid snapshot')
+          !result.result || typeof result.result !== 'object' || !('worktrees' in result.result) || !Array.isArray(result.result.worktrees)) throw new Error('invalid snapshot')
         resolve(result)
       } catch { reject(new Error('snapshot unavailable')) }
     })
@@ -59,21 +59,29 @@ export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace,
           clear()
           return empty('disabled')
         }
-        const sessions = nativeSessionIds(snapshot, id)
+        if (missingFromPartialSnapshot(snapshot, id)) return empty('unavailable')
+        const { sessions, truncated } = nativeJournalSessions(snapshot, id)
         const children = nativeWorkingChildIds(snapshot, id)
-        const journals = await Promise.all(sessions.ids.map((sessionId) => journal(sessionId, children.get(sessionId) ?? new Set())))
+        const journals = await Promise.all(sessions.map(s => journal(s.id, children.get(s.id) ?? new Set())))
         if (epoch !== requestEpoch || !(await enabled()) || (await workspace()) !== id) {
           clear()
           return empty('disabled')
         }
-        const journalStatus: JournalResult['status'] | undefined = sessions.ids.length === 0 ? undefined
+        const journalStatus: JournalResult['status'] | undefined = sessions.length === 0 ? undefined
           : journals.some((x) => x.status === 'unavailable') ? 'unavailable'
-          : sessions.truncated || journals.some((x) => x.status === 'truncated') ? 'truncated' : 'ready'
-        const workingSessions = nativeWorkingSessionIds(snapshot, id)
+          : truncated || journals.some((x) => x.status === 'truncated') ? 'truncated' : 'ready'
+        const newestFirst = (a: NativeToolCall, b: NativeToolCall) => b.observedAt - a.observedAt
+        const callsBySession = journals.map((j, i) => (j.recentTools ?? []).map(call => ({
+          ...call, agentType: sessions[i].agentType, state: call.state === 'running' && !sessions[i].working ? 'unknown' as const : call.state
+        })).sort(newestFirst))
+        // Keep a quieter chat represented even if another fills the entire window.
+        const latestPerSession = callsBySession.flatMap(calls => calls.slice(0, 1))
+        const remaining = callsBySession.flatMap(calls => calls.slice(1)).sort(newestFirst)
+        const recentTools = latestPerSession.concat(remaining.slice(0, 30 - latestPerSession.length)).sort(newestFirst)
         const active = new Map<string, ResourceObservation>()
         const currentResources = parseNativeActiveResources(snapshot, id)
         for (let i = 0; i < journals.length; i++) {
-          if (workingSessions.has(sessions.ids[i])) currentResources.push(...(journals[i].activeResources ?? []))
+          if (sessions[i].working) currentResources.push(...(journals[i].activeResources ?? []))
         }
         for (const resource of currentResources) {
           const key = `${resource.category}:${resource.name}`
@@ -86,7 +94,7 @@ export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace,
           if (!previous || resource.evidence === 'observed') observed.set(key, resource)
         }
         while (observed.size > 100) observed.delete(observed.keys().next().value!)
-        return { status: 'ready', activities: parseNativeActivity(snapshot, id), resources: [...observed.values()], activeResources: [...active.values()].slice(-100), ...(journalStatus ? { journalStatus } : {}) }
+        return { status: 'ready', ...(recentTools.length ? { recentTools } : {}), activities: parseNativeActivity(snapshot, id), resources: [...observed.values()], activeResources: [...active.values()].slice(-100), ...(journalStatus ? { journalStatus } : {}) }
       } catch { return empty('unavailable') }
     })()
     try { return await inFlight } finally { inFlight = null }

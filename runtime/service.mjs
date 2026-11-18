@@ -33,7 +33,7 @@ export async function createToolboxService(options) {
   const bundles = new Map()
   const idleMs = options.idleTimeoutMs ?? 15 * 60_000
   let endpoint = ''; let closed = false; let activeRequests = 0
-  function emit(event) { try { options.onEvent?.({ ...event }) } catch {} }
+  function emit(event, itemId, dispatched) { try { options.onEvent?.({ ...event }, itemId, dispatched) } catch {} }
   async function disposeClient(entry) {
     entry?.client?.close()
     if (entry?.pending) { try { (await entry.pending).close() } catch {} }
@@ -94,8 +94,10 @@ export async function createToolboxService(options) {
     if (typeof request.id !== 'string') throw error('INVALID_REQUEST', 'A selected capability ID is required.')
     const record = getRecord(bundle, request.id, request.op === 'skill' ? 'skill' : 'mcp')
     if (request.op === 'call' && (typeof request.tool !== 'string' || !request.tool || request.tool.length > 200 || /[\x00-\x1f]/.test(request.tool) || !object(request.arguments))) throw error('INVALID_REQUEST', 'A tool name and JSON argument object are required.')
-    const event = { id: randomUUID(), bundleId: bundle.id, name: record.name + (request.op === 'call' ? ' · ' + request.tool : ''), kind: record.kind, state: 'running', startedAt: Date.now() }
-    emit(event)
+    const event = { id: randomUUID(), bundleId: bundle.id, operation: request.op, capabilityName: record.name, name: record.name, kind: record.kind, state: 'running', startedAt: Date.now() }
+    let dispatched = request.op !== 'call'
+    if (dispatched) emit(event, record.id, true)
+    else options.onCallAttempt?.(bundle.id, event.id, record.id)
     let entry
     try {
       let result
@@ -120,15 +122,19 @@ export async function createToolboxService(options) {
           // Check the live selected server's catalog, rather than silently invoking an arbitrary name.
           const catalog = entry.tools ?? await tools(client)
           entry.tools = catalog
-          if (!catalog.tools.some(x => x.name === request.tool)) throw error('UNKNOWN_TOOL', 'The requested tool is not exposed by this selected server.')
+          const tool = catalog.tools.find(x => x.name === request.tool)
+          if (!tool) throw error('UNKNOWN_TOOL', 'The requested tool is not exposed by this selected server.')
+          dispatched = true
+          event.name = record.name + ' · ' + tool.name
+          emit(event, record.id, true)
           result = await client.request('tools/call', { name: request.tool, arguments: request.arguments })
         }
       }
       if (bundle.revoked || closed) throw error('BUNDLE_EXPIRED', 'The bundle was revoked before the operation completed.')
-      emit({ ...event, state: result?.isError === true ? 'failed' : 'succeeded', finishedAt: Date.now() })
+      emit({ ...event, state: result?.isError === true ? 'failed' : 'succeeded', finishedAt: Date.now() }, record.id, dispatched)
       return result
     } catch (cause) {
-      emit({ ...event, state: 'failed', finishedAt: Date.now() })
+      emit({ ...event, state: 'failed', finishedAt: Date.now() }, record.id, dispatched)
       if (entry && ['TIMEOUT', 'SERVER_CLOSED', 'CONNECTION_FAILED', 'INVALID_PROTOCOL'].includes(cause?.code)) { entry.expired = true; entry.client?.close() }
       throw cause
     } finally { if (entry) { entry.busy--; entry.lastUsed = Date.now() } }

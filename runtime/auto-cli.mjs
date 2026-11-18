@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 class SafeError extends Error {}
 const usage =
-  'Usage: node auto-cli.mjs recommend "task" | search "keywords" | start | --session HANDLE recommend "task"|search "keywords"|skill ID|tools ID|call ID TOOL|reconnect ID|end. Send call arguments as JSON on stdin.'
+  'Usage: node auto-cli.mjs recommend "task" | search "keywords" | start | --session HANDLE recommend "task"|search "keywords"|skill ID|tools ID|call ID TOOL|reconnect ID|end. Use --session for recommendation activity attribution. Send call arguments as JSON on stdin.'
 async function input() {
   if (process.stdin.isTTY) return {}
   const chunks = []

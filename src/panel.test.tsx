@@ -110,7 +110,7 @@ test('shows detected resource names and explains the detection source', async ()
   try {
     assert.equal(Boolean(view.find({ text: 'ui-ux-pro-max' })), true)
     assert.equal(Boolean(view.find({ text: 'figma-local' })), true)
-    assert.equal(Boolean(view.find({ text: 'Names found in tool calls and skill file paths. In use marks activity detected during an ongoing agent turn.' })), true)
+    assert.equal(Boolean(view.find({ text: 'Observed in tool calls, skill file paths and the shared runner. In use marks a running request or an ongoing agent turn.' })), true)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })
@@ -177,10 +177,76 @@ test('shows Korean labels and privacy disclosure beside the switch', async () =>
   try {
     assert.equal(Boolean(view.find({ text: '감지된 항목' })), true)
     assert.equal(Boolean(view.find({ text: '스킬' })), true)
-    assert.equal(Boolean(view.find({ text: '도구 호출과 스킬 파일 경로에서 찾은 이름입니다. 현재 사용 중은 진행 중인 에이전트 작업에서 감지된 항목입니다.' })), true)
+    assert.equal(Boolean(view.find({ text: '도구 호출, 스킬 파일 경로, 공용 실행기에서 감지한 항목입니다. 현재 사용 중은 요청이나 에이전트 작업이 진행 중일 때 표시됩니다.' })), true)
     await view.toggle({ label: '설정 및 개인정보' })
     assert.equal(Boolean(view.find({ label: '채팅 활동 표시' })), true)
     assert.equal(Boolean(view.find({ text: '켜면 모든 작업공간의 상태에 포함된 프롬프트·도구 입력·응답을 읽습니다. macOS에서는 현재 작업공간의 최근 도구 입력도 읽습니다.' })), true)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('Jev shows ranked candidates separately from confirmed reads and calls with chat monitoring disabled', async () => {
+  let workspaceId = 'first'
+  const host = mockHost({ settings: { nativeActivity: false }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'toolbox.activity': () => workspaceId === 'first' ? { workspaceId, recommendations: [
+      { id: 'read', name: 'design', kind: 'skill', at: 1700000000000 },
+      { id: 'list', name: 'maps', kind: 'mcp', at: 1700000000010 },
+      { id: 'use', name: 'graphics', kind: 'mcp', at: 1700000000020 }
+    ], events: [
+      { id: 'e1', bundleId: 'a', recommendationId: 'read', name: 'design', kind: 'skill', operation: 'skill', state: 'succeeded', startedAt: 1700000000030 },
+      { id: 'e2', bundleId: 'a', recommendationId: 'list', name: 'maps', kind: 'mcp', operation: 'tools', state: 'succeeded', startedAt: 1700000000040 },
+      { id: 'e3', bundleId: 'a', recommendationId: 'use', name: 'graphics · draw', kind: 'mcp', operation: 'call', state: 'failed', startedAt: 1700000000050 },
+      { id: 'other', bundleId: 'b', capabilityName: 'other-server', name: 'other-server · unrelated', kind: 'mcp', operation: 'call', state: 'succeeded', startedAt: 1700000000060 }
+    ] } : { workspaceId, recommendations: [], events: [] }
+  } })
+  const view = await mount(panel, { host, locale: 'ko-KR' })
+  try {
+    for (const text of ['Jev 추천', 'other-server', 'design', '읽음', 'maps', '추천됨', 'graphics · draw', '호출 실패']) {
+      assert.ok(view.find({ text }), text)
+    }
+    assert.equal(view.find({ text: 'other-server · unrelated' }), null)
+    assert.equal(view.find({ text: '현재 사용 중' }), null)
+    await view.toggle({ label: '최근 도구 호출 · 2' })
+    assert.ok(view.find({ text: 'other-server · unrelated' }))
+    workspaceId = 'second'
+    await view.emit('workspace.changed', { context: null })
+    assert.equal(view.find({ text: 'graphics · draw' }), null)
+    assert.equal(view.find({ text: 'design' }), null)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('hidden activity refreshes its workspace history on return and shows provider-native ordinary tools', async () => {
+  let reads = 0
+  const host = mockHost({ settings: { nativeActivity: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'toolbox.activity': () => { reads++; return { workspaceId: 'ws', recommendations: [], events: [] } },
+    'native.get': () => ({ status: 'ready', resources: [], activities: [], recentTools: [
+      { id: 'ag1', name: 'view_file', agentType: 'Antigravity', observedAt: 1700000000000, state: 'completed' },
+      { id: 'ag2', name: 'jev-code/rank', agentType: 'Antigravity', observedAt: 1700000000020, state: 'completed' }
+    ] })
+  } })
+  const view = await mount(panel, { host, visible: false })
+  try {
+    await view.post('toolbox.changed', {})
+    assert.equal(reads, 0)
+    await view.setVisible(true)
+    await view.post('toolbox.changed', {})
+    assert.equal(reads, 1)
+    await view.emit('workspace.changed', { context: null })
+    assert.ok(view.find({ label: 'Direct Jev lookup · jev-code/rank' }))
+    await view.toggle({ label: 'Direct Jev lookup · jev-code/rank' })
+    assert.ok(view.find({ text: 'The agent called Jev directly. The returned candidates are unavailable for this call.' }))
+    assert.equal(view.find({ text: 'Suggested' }), null)
+    await view.toggle({ label: 'Recent tool calls · 2' })
+    assert.ok(view.find({ text: 'Antigravity · Jev lookup' }))
+    assert.ok(view.find({ text: 'view_file' }))
+    assert.ok(view.find({ text: 'Antigravity' }))
+    assert.ok(view.find({ text: 'Completed' }))
+    await view.toggle({ label: 'Settings & privacy' })
+    await view.toggle({ label: 'Show chat activity' })
+    assert.equal(view.find({ text: 'view_file' }), null)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })

@@ -1,10 +1,11 @@
 import type { NativeResult } from './native-reader'
 import type { ResourceObservation } from './resource-classifier'
-import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison } from './toolbox-types'
+import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity } from './toolbox-types'
 export type Call = { id: string; tool: string; agent: string; state: 'running' | 'finished' | 'uncertain' }
 export {}
 declare module 'orca' {
   interface PluginRequests {
+    'toolbox.activity': { output: ToolboxActivity }
     'toolbox.catalog': { output: ToolboxCatalog }
     'toolbox.state': { output: ToolboxState }
     'toolbox.select': { input: { ids: string[]; workspaceId: string }; output: ToolboxState }

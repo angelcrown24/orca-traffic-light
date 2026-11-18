@@ -115,7 +115,7 @@ async function readManifest(base) {
   }
 }
 function mainBlock(cli) {
-  return `${START}\n## Traffic Light shared capabilities\nWhen this task needs a skill or external tool, use the local shared catalog instead of loading every installed capability. Requires local shell access and Node.js 18+.\n- When a task would benefit from a skill, even if the user did not name it, run \`node ${q(cli)} recommend "short task description"\`. Use the conversation handle with --session if started. Check the suggested metadata and read a relevant skill with the handle before applying it. Check required tools against this agent’s available tools or the approved catalog. If a dependency is missing, report it and respect the skill’s fallback conditions.\n- Search only relevant approved metadata: \`node ${q(cli)} search "task keywords"\`.\n- Before first use in THIS conversation, run \`node ${q(cli)} start\` once and remember the returned session handle. Never borrow another conversation's handle.\n- Use \`node ${q(cli)} --session HANDLE search "keywords"\`, \`skill ITEM_ID\`, or \`tools ITEM_ID\` only as needed. Invoke \`call ITEM_ID TOOL_NAME\` with a JSON argument object on stdin; use \`end\` when finished.\n- Run from the task workspace. Access is determined by the canonical working directory and the workspace's selected allowlist, not the focused Orca tab.\n- A missing runner or denied capability is optional-tool unavailability: continue ordinary work. Never restart the conversation, change provider MCP settings, load all tools, or automatically retry a write. Preserve existing user instructions and approvals.\n${END}`
+  return `${START}\n## Traffic Light shared capabilities\nWhen this task needs a skill or external tool, use the local shared catalog instead of loading every installed capability. Requires local shell access and Node.js 18+.\n- When a skill or external tool could help, start this conversation’s handle first and run \`node ${q(cli)} --session HANDLE recommend "short task description"\`. Use the same handle to read a recommended skill or list and call a recommended MCP server’s tools as needed. Check required tools against this agent’s available tools or the approved catalog. If a dependency is missing, report it and respect the skill’s fallback conditions.\n- Search only relevant approved metadata: \`node ${q(cli)} search "task keywords"\`.\n- Before first use in THIS conversation, run \`node ${q(cli)} start\` once and remember the returned session handle. Never borrow another conversation's handle.\n- Use \`node ${q(cli)} --session HANDLE search "keywords"\`, \`skill ITEM_ID\`, or \`tools ITEM_ID\` only as needed. Invoke \`call ITEM_ID TOOL_NAME\` with a JSON argument object on stdin; use \`end\` when finished.\n- Run from the task workspace. Access is determined by the canonical working directory and the workspace's selected allowlist, not the focused Orca tab.\n- A missing runner or denied capability is optional-tool unavailability: continue ordinary work. Never restart the conversation, change provider MCP settings, load all tools, or automatically retry a write. Preserve existing user instructions and approvals.\n${END}`
 }
 function bridgeBlock(ssot) {
   return `${START}\nRead the shared agent instructions in ${q(ssot)} before using shared tools. The Traffic Light block there provides the local, on-demand capability commands.\n${END}`
@@ -195,7 +195,10 @@ export async function bootstrapStatus({ home = homedir() } = {}) {
     ['Gemini', join(home, '.gemini', 'GEMINI.md')],
     ['Claude', join(home, '.claude', 'CLAUDE.md')]
   ]) {
-    providers.push({ name, state: await installedBlock(path) ? 'ready' : 'unconfigured' })
+    const state = await installedBlock(path) ? 'ready' : 'unconfigured'
+    providers.push({ name, state })
+    // Antigravity and Gemini both discover this global instruction file.
+    if (name === 'Gemini') providers.push({ name: 'Antigravity', state })
   }
   const cli = await existing(join(base, 'auto-cli.mjs'))
   const setup = Boolean(

@@ -1,5 +1,8 @@
 import { atom, Badge, Box, Button, Collapsible, env, Heading, on, plugin, read, Row, Separator, set, settings, Stack, Switch, Tab, Tabs, Text, type PanelContext } from 'orca'
 import type { Call } from './protocol'
+import { isJevLookup, RecommendationActivity } from './recommendation-activity'
+import type { ToolboxActivity } from './toolbox-types'
+import type { NativeToolCall } from './native-reader'
 import type { NativeActivity } from './native-activity'
 import type { ResourceObservation } from './resource-classifier'
 import { ArchitecturePanel, ToolboxPanel, openToolbox, setupToolbox } from './toolbox-panel'
@@ -17,6 +20,11 @@ const nativeEnabled = atom(false)
 const nativeStatus = atom<'disabled' | 'ready' | 'unavailable'>('disabled')
 const journalStatus = atom<'ready' | 'truncated' | 'unavailable' | undefined>(undefined)
 const nativeActivities = atom<NativeActivity[]>([])
+const nativeTools = atom<NativeToolCall[]>([])
+const sharedActivity = atom<ToolboxActivity | null>(null)
+const sharedUnavailable = atom(false)
+let sharedRequestId = 0
+let sharedDirty = true
 let nativeRequestId = 0
 let requestId = 0
 let isPanelVisible = () => false
@@ -39,9 +47,35 @@ async function refresh(): Promise<void> {
     set(failed, true)
   } finally { if (id === requestId) set(loading, false) }
 }
+async function refreshShared(): Promise<void> {
+  sharedDirty = true
+  if (!isPanelVisible()) return
+  const id = ++sharedRequestId
+  sharedDirty = false
+  try {
+    const result = await plugin.request('toolbox.activity')
+    if (id !== sharedRequestId) return
+    set(sharedActivity, result?.workspaceId ? result : null)
+    set(sharedUnavailable, false)
+  } catch {
+    if (id !== sharedRequestId) return
+    set(sharedActivity, null)
+    set(sharedUnavailable, true)
+    sharedDirty = true
+  }
+}
+function clearNative(status: 'disabled' | 'unavailable') {
+  nativeRequestId++
+  set(nativeActivities, [])
+  set(nativeTools, [])
+  set(nativeResources, [])
+  set(nativeActiveResources, [])
+  set(journalStatus, undefined)
+  set(nativeStatus, status)
+}
 async function readNativeSetting(): Promise<void> {
   try { set(nativeEnabled, (await settings.get('nativeActivity')) === true) }
-  catch { set(nativeEnabled, false); set(nativeActiveResources, []); set(nativeStatus, 'unavailable') }
+  catch { set(nativeEnabled, false); clearNative('unavailable') }
 }
 async function refreshNative(): Promise<void> {
   if (!read(nativeEnabled) || !isPanelVisible()) return
@@ -52,87 +86,115 @@ async function refreshNative(): Promise<void> {
     set(nativeStatus, result.status)
     set(journalStatus, result.journalStatus)
     set(nativeActivities, result.activities)
+    set(nativeTools, result.status === 'ready' ? result.recentTools ?? [] : [])
     set(nativeResources, result.resources ?? [])
     set(nativeActiveResources, result.status === 'ready' ? result.activeResources ?? [] : [])
   } catch {
     if (id !== nativeRequestId) return
-    set(nativeActivities, [])
-    set(nativeResources, [])
-    set(nativeActiveResources, [])
-    set(journalStatus, undefined)
-    set(nativeStatus, 'unavailable')
+    clearNative('unavailable')
   }
 }
 async function changeNative(enabled: boolean): Promise<void> {
   try {
     await settings.set('nativeActivity', enabled)
     set(nativeEnabled, enabled)
-    nativeRequestId++
-    set(nativeActivities, [])
-    set(nativeResources, [])
-    set(nativeActiveResources, [])
-    set(journalStatus, undefined)
-    set(nativeStatus, 'disabled')
+    clearNative('disabled')
     if (enabled) await refreshNative()
-  } catch { set(nativeEnabled, false); set(nativeActiveResources, []); set(nativeStatus, 'unavailable') }
+  } catch { set(nativeEnabled, false); clearNative('unavailable') }
 }
 export function setup(ctx: PanelContext): void {
   isPanelVisible = () => read(ctx.visible) && read(tab) === 'activity'
   setupToolbox(ctx, () => read(tab) === 'library' || read(tab) === 'structure')
-  ctx.subscriptions.push({ dispose: () => { isPanelVisible = () => false } })
+  ctx.subscriptions.push({ dispose: () => { sharedRequestId++; isPanelVisible = () => false } })
+  ctx.subscriptions.push(plugin.on('toolbox.changed', () => { void refreshShared() }))
   ctx.subscriptions.push(plugin.on('calls.changed', () => { void refresh() }))
-  ctx.subscriptions.push(on('workspace.changed', () => { set(calls, []); set(terminalResources, []); set(terminalActiveResources, []); nativeRequestId++; set(nativeActivities, []); set(nativeResources, []); set(nativeActiveResources, []); set(journalStatus, undefined); void refresh(); void refreshNative() }))
-  ctx.subscriptions.push(settings.onDidChange(() => { void readNativeSetting().then(() => { if (!read(nativeEnabled)) { nativeRequestId++; set(nativeActivities, []); set(nativeResources, []); set(nativeActiveResources, []); set(journalStatus, undefined); set(nativeStatus, 'disabled') } }) }))
-  const timer = setInterval(() => { if (isPanelVisible()) { void refresh(); void refreshNative() } }, 3000)
+  ctx.subscriptions.push(on('workspace.changed', () => {
+    sharedRequestId++
+    set(sharedActivity, null)
+    set(sharedUnavailable, false)
+    set(calls, [])
+    set(terminalResources, [])
+    set(terminalActiveResources, [])
+    clearNative('disabled')
+    void refreshShared()
+    void refresh()
+    void refreshNative()
+  }))
+  ctx.subscriptions.push(settings.onDidChange(() => {
+    void readNativeSetting().then(() => { if (!read(nativeEnabled)) clearNative('disabled') })
+  }))
+  const timer = setInterval(() => { if (isPanelVisible()) { void refresh(); void refreshNative(); if (sharedDirty) void refreshShared() } }, 3000)
   ctx.subscriptions.push({ dispose: () => clearInterval(timer) })
   void readNativeSetting().then(() => { if (read(nativeEnabled)) void refreshNative() })
   void refresh()
+  void refreshShared()
 }
 const labels = {
   en: {
     summary: 'Activity in this workspace', chatOn: 'Chat monitoring on', chatOff: 'Chat monitoring off', chatError: 'Chat activity unavailable',
-    detected: 'Detected items', detectedHelp: 'Names found in tool calls and skill file paths. In use marks activity detected during an ongoing agent turn.',
+    detected: 'Detected items', detectedHelp: 'Observed in tool calls, skill file paths and the shared runner. In use marks a running request or an ongoing agent turn.',
     skill: 'Skills', plugin: 'Plugins', mcp: 'MCP servers', none: 'No items detected yet',
     empty: 'An empty list does not mean an item was unused.', inUse: 'In use',
     agent: 'Agent activity', subagents: 'Subagents', subagent: 'Subagent', agentNone: 'No agent activity reported.', agentOff: 'Turn on chat activity in settings to see agent status.', unavailable: 'Could not load chat activity.',
     truncated: 'Only recent chat history is shown.', historyUnavailable: 'Recent chat history is unavailable.',
-    toolCalls: 'Recent tool calls', toolHelp: 'Local terminal calls observed since the plugin started.',
-    toolNone: 'No terminal calls observed yet.', noWorkspace: 'Open a workspace to see activity.',
+    toolCalls: 'Recent tool calls', nativeCalls: 'Native chats', sharedCalls: 'Shared runner', terminalCalls: 'Terminals', callInProgress: 'Running', callDone: 'Completed', callFailed: 'Failed', nativeChat: 'Chat', jevLookup: 'Jev lookup',
+    toolNone: 'No tool calls observed yet.', noWorkspace: 'Open a workspace to see activity.',
     loading: 'Loading activity…', failed: 'Could not load tool calls.', retry: 'Retry',
     settings: 'Settings & privacy', setting: 'Show chat activity',
     privacy: 'When on, workspace status can include prompts, tool inputs and replies from all workspaces. On macOS, recent tool inputs in this workspace are also read.',
     privacyMore: 'How activity is read',
-    privacyDetail: 'Only agent status, tool and detected names are displayed. Inputs and conversation data are not saved, logged or sent by this plugin. Reads run while this panel is visible. Activity may be incomplete and short calls can be missed.',
-    toolDetail: 'Finished means the call ended, not that it succeeded. Calls without IDs are matched by inference; ambiguous calls are uncertain. Calls without a terminal ID are omitted.',
+    privacyDetail: 'This chat monitor displays agent status and tool names. It does not store, log or send the chat inputs it inspects. Reads run while this panel is visible. Activity may be incomplete and short calls can be missed.',
+    toolDetail: 'Finished marks the end of a terminal call. Ambiguous matches appear as uncertain.',
     working: 'Working', blocked: 'Blocked', waiting: 'Waiting', done: 'Done', unverifiable: 'Unverified',
     running: 'Awaiting finish', finished: 'Finished', uncertain: 'Uncertain'
   },
   ko: {
     summary: '현재 작업공간 활동', chatOn: '채팅 활동 켜짐', chatOff: '채팅 활동 꺼짐', chatError: '채팅 활동 오류',
-    detected: '감지된 항목', detectedHelp: '도구 호출과 스킬 파일 경로에서 찾은 이름입니다. 현재 사용 중은 진행 중인 에이전트 작업에서 감지된 항목입니다.',
+    detected: '감지된 항목', detectedHelp: '도구 호출, 스킬 파일 경로, 공용 실행기에서 감지한 항목입니다. 현재 사용 중은 요청이나 에이전트 작업이 진행 중일 때 표시됩니다.',
     skill: '스킬', plugin: '플러그인', mcp: 'MCP 서버', none: '감지된 항목 없음',
     empty: '목록에 없어도 설치했거나 사용했을 수 있습니다.', inUse: '현재 사용 중',
     agent: '에이전트 활동', subagents: '서브에이전트', subagent: '서브에이전트', agentNone: '보고된 에이전트 활동이 없습니다.', agentOff: '설정에서 채팅 활동을 켜면 상태를 볼 수 있습니다.', unavailable: '채팅 활동을 불러오지 못했습니다.',
     truncated: '최근 채팅 기록 일부만 표시합니다.', historyUnavailable: '최근 채팅 기록을 불러올 수 없습니다.',
-    toolCalls: '최근 도구 호출', toolHelp: '플러그인 실행 중 관측한 로컬 터미널 호출입니다.',
-    toolNone: '관측된 터미널 호출이 없습니다.', noWorkspace: '작업공간을 열어 활동을 확인하세요.',
+    toolCalls: '최근 도구 호출', nativeCalls: '네이티브 채팅', sharedCalls: '공용 실행기', terminalCalls: '터미널', callInProgress: '실행 중', callDone: '완료', callFailed: '실패', nativeChat: '채팅', jevLookup: 'Jev 조회',
+    toolNone: '관측된 도구 호출이 없습니다.', noWorkspace: '작업공간을 열어 활동을 확인하세요.',
     loading: '활동을 불러오는 중…', failed: '도구 호출을 불러오지 못했습니다.', retry: '다시 시도',
     settings: '설정 및 개인정보', setting: '채팅 활동 표시',
     privacy: '켜면 모든 작업공간의 상태에 포함된 프롬프트·도구 입력·응답을 읽습니다. macOS에서는 현재 작업공간의 최근 도구 입력도 읽습니다.',
     privacyMore: '어떤 정보를 읽나요?',
-    privacyDetail: '화면에는 에이전트 상태, 도구 및 감지된 이름만 표시합니다. 입력과 대화 내용은 이 플러그인이 저장·기록·전송하지 않습니다. 패널이 보이는 동안 조회하며 짧은 활동은 놓칠 수 있습니다.',
-    toolDetail: '완료는 호출 종료를 뜻하며 성공 여부는 알 수 없습니다. 호출 ID가 없으면 추정해 연결하고, 모호한 경우 불확실로 표시합니다. 터미널 ID가 없는 호출은 제외합니다.',
+    privacyDetail: '채팅 모니터는 에이전트 상태와 도구 이름을 표시합니다. 조회한 채팅 입력은 저장하거나 전송하지 않습니다. 패널이 보이는 동안 조회하며 짧은 활동은 놓칠 수 있습니다.',
+    toolDetail: '터미널의 종료됨은 호출이 끝났다는 뜻입니다. 대응하는 호출이 모호하면 불확실로 표시합니다.',
     working: '작업 중', blocked: '차단됨', waiting: '대기 중', done: '완료', unverifiable: '확인 불가',
     running: '종료 대기', finished: '종료됨', uncertain: '불확실'
   }
 } as const
 
+// A direct lookup proves Jev was asked. Only the shared runner can attribute returned candidates.
+function sourceLabel(provider: string, name: string, lookup: string) {
+  return isJevLookup(name)
+    ? provider + ' · ' + lookup : provider
+}
+
 function ActivityPanel() {
   const t = env.locale.toLowerCase().startsWith('ko') ? labels.ko : labels.en
   const items = read(calls)
+  const snapshot = read(sharedActivity)
+  const journalCalls = read(nativeTools)
+  const nativeLookup = journalCalls.find(call => isJevLookup(call.name))
+  const terminalLookup = items.find(call => isJevLookup(call.tool))
+  const direct = nativeLookup ? { name: nativeLookup.name, provider: nativeLookup.agentType ?? t.nativeChat, at: nativeLookup.observedAt }
+    : terminalLookup ? { name: terminalLookup.tool, provider: terminalLookup.agent } : undefined
+  const runnerCalls = (snapshot?.events ?? []).filter(event => event.operation === 'call')
+    .sort((a, b) => b.startedAt - a.startedAt).slice(0, 30)
+  const recentCount = items.length + journalCalls.length + runnerCalls.length
   const resources = new Map<string, ResourceObservation>()
   const activeResources = [...read(terminalActiveResources), ...read(nativeActiveResources)]
   const activeKeys = new Set(activeResources.map((item) => `${item.category}:${item.name}`))
+  for (const event of snapshot?.events ?? []) {
+    if (!event.capabilityName || (event.operation !== 'call' && event.operation !== 'skill')) continue
+    const key = event.kind + ':' + event.capabilityName
+    resources.set(key, { category: event.kind, name: event.capabilityName, evidence: 'observed' })
+    if (event.state === 'running') activeKeys.add(key)
+  }
   for (const item of [...read(terminalResources), ...read(nativeResources), ...activeResources]) {
     const key = `${item.category}:${item.name}`
     const previous = resources.get(key)
@@ -160,6 +222,8 @@ function ActivityPanel() {
         <Badge tone={read(nativeStatus) === 'unavailable' ? 'danger' : read(nativeEnabled) ? 'accent' : 'neutral'}>{read(nativeStatus) === 'unavailable' ? t.chatError : read(nativeEnabled) ? t.chatOn : t.chatOff}</Badge>
       </Row>
     </Stack>
+
+    <RecommendationActivity direct={direct} snapshot={snapshot} unavailable={read(sharedUnavailable)} />
 
     <Stack gap="sm">
       <Heading level={2}>{t.detected}</Heading>
@@ -200,15 +264,31 @@ function ActivityPanel() {
 
     {read(failed) ? <Row gap="sm" align="center" wrap><Text tone="danger">{t.failed}</Text><Button size="sm" onPress={refresh}>{t.retry}</Button></Row> : null}
     <Separator />
-    <Collapsible title={`${t.toolCalls} · ${items.length}`}>
+    <Collapsible title={`${t.toolCalls} · ${recentCount}`}>
       <Stack gap="sm">
-        <Text muted size="xs">{t.toolHelp}</Text>
-        {read(loading) ? <Text>{t.loading}</Text> : read(failed) ? null : !read(workspace) ? <Text>{t.noWorkspace}</Text> : items.length === 0 ? <Text muted size="sm">{t.toolNone}</Text> :
-          items.map((call) => <Row key={call.id} justify="between" align="center" gap="sm" wrap>
-            <Box direction="column" gap="xs" minWidth={0} grow><Text size="sm" truncate>{call.tool}</Text><Text muted size="xs">{call.agent}</Text></Box>
+        {recentCount === 0 ? <Text muted size="sm">{read(loading) ? t.loading : !read(workspace) ? t.noWorkspace : t.toolNone}</Text> : null}
+        {journalCalls.length ? <Stack gap="xs">
+          <Text size="sm" weight="semibold">{t.nativeCalls}</Text>
+          {journalCalls.map(call => <Row key={call.id} justify="between" align="center" gap="sm" wrap>
+            <Box direction="column" gap="xs" minWidth={0} grow><Text size="sm" truncate>{call.name}</Text><Text muted size="xs">{sourceLabel(call.agentType ?? t.nativeChat, call.name, t.jevLookup)}</Text></Box>
+            <Badge tone={call.state === 'running' ? 'accent' : call.state === 'failed' ? 'danger' : 'neutral'}>{({ running: t.callInProgress, completed: t.callDone, failed: t.callFailed, unknown: t.unverifiable })[call.state]}</Badge>
+          </Row>)}
+        </Stack> : null}
+        {runnerCalls.length ? <Stack gap="xs">
+          <Text size="sm" weight="semibold">{t.sharedCalls}</Text>
+          {runnerCalls.map(call => <Row key={call.id} justify="between" align="center" gap="sm" wrap>
+            <Box minWidth={0} grow><Text size="sm" truncate>{call.name}</Text></Box>
+            <Badge tone={call.state === 'running' ? 'accent' : call.state === 'failed' ? 'danger' : 'neutral'}>{({ running: t.callInProgress, succeeded: t.callDone, failed: t.callFailed })[call.state]}</Badge>
+          </Row>)}
+        </Stack> : null}
+        {items.length ? <Stack gap="xs">
+          <Text size="sm" weight="semibold">{t.terminalCalls}</Text>
+          {items.map(call => <Row key={call.id} justify="between" align="center" gap="sm" wrap>
+            <Box direction="column" gap="xs" minWidth={0} grow><Text size="sm" truncate>{call.tool}</Text><Text muted size="xs">{sourceLabel(call.agent, call.tool, t.jevLookup)}</Text></Box>
             <Badge tone={call.state === 'running' ? 'warning' : 'neutral'}>{callNames[call.state]}</Badge>
           </Row>)}
-        <Text muted size="xs">{t.toolDetail}</Text>
+          <Text muted size="xs">{t.toolDetail}</Text>
+        </Stack> : null}
       </Stack>
     </Collapsible>
     <Collapsible title={t.settings}>
@@ -228,7 +308,7 @@ export default function Panel() {
     <Tabs label={ko ? 'Traffic Light 보기' : 'Traffic Light views'} value={read(tab)} onChange={async value => {
       set(tab, value)
       if (value === 'library' || value === 'structure') await openToolbox()
-      if (value === 'activity') { await refresh(); await refreshNative() }
+      if (value === 'activity') await Promise.all([refresh(), refreshNative(), refreshShared()])
     }}>
       <Tab value="activity" label={ko ? '활동' : 'Activity'} icon="activity"><ActivityPanel /></Tab>
       <Tab value="library" label={ko ? '공용 도구' : 'Library'} icon="blocks"><ToolboxPanel /></Tab>

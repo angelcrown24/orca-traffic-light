@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
-import { recommendSkills } from './skill-recommend.mjs'
+import { recommendCapabilities } from './skill-recommend.mjs'
 import { createAutomation } from './automation.mjs'
 import { installBootstrap, removeBootstrap, bootstrapStatus } from './bootstrap.mjs'
 
@@ -219,7 +219,7 @@ test('bootstrap refuses modified managed content without overwriting unrelated i
 })
 
 test('stable installed CLI uses cwd and distinct handles without per-session pasted instructions', async (t) => {
-  const { home, workspace, other, runtime } = await fixture(t)
+  const { home, workspace, other, runtime } = await fixture(t, { rankEnv: { TYPESAFE_BASE_URL: 'https://disabled.invalid' } })
   await grant(runtime, workspace)
   await runtime.enableBootstrap()
   const cli = join(home, '.agents', 'traffic-light', 'auto-cli.mjs')
@@ -236,7 +236,7 @@ test('stable installed CLI uses cwd and distinct handles without per-session pas
   const found = await run(['search', 'count'])
   assert.equal(found.code, 0)
   assert.equal(JSON.parse(found.out).items.length, 1)
-  assert.deepEqual(JSON.parse((await run(['recommend', 'help count values'])).out).items, [])
+  assert.deepEqual(JSON.parse((await run(['recommend', 'help count values'])).out).items.map(x => x.id), [record.id])
   const a = JSON.parse((await run(['start'])).out).session,
     b = JSON.parse((await run(['start'])).out).session
   assert.notEqual(a, b)
@@ -324,21 +324,24 @@ test('prepare verifies ownership without enabling workspaces or installing instr
   await assert.rejects(lstat(join(home, '.agents', 'traffic-light', 'auto-cli.mjs')), { code: 'ENOENT' })
 })
 
-test('a local task recommendation considers only skills approved for this handle and reads only on demand', async t => {
+test('Jev suggestions and observed use are linked by handle and item, never by name or workspace alone', async t => {
   const received = []
+  let modelAvailable = true
   const ranker = createServer(async (req, res) => {
-    if (req.url === '/api/tags') return res.end(JSON.stringify({ models: [{ name: 'kev:fixture', capabilities: ['decision'] }] }))
+    if (req.url === '/api/tags') return res.end(JSON.stringify({ models: modelAvailable ? [{ name: 'kev:fixture', capabilities: ['decision'] }] : [] }))
     const chunks = []
     for await (const chunk of req) chunks.push(chunk)
     received.push(JSON.parse(Buffer.concat(chunks).toString()))
-    res.end(JSON.stringify({ answers: { s0: { type: 'noul', noul: 0.91 }, any: { type: 'noul', noul: 0.9 } } }))
+    res.end(JSON.stringify({ answers: { s0: { type: 'noul', noul: 0.8 }, s1: { type: 'noul', noul: 0.91 }, any: { type: 'noul', noul: 0.9 } } }))
   })
   await new Promise(resolve => ranker.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise(resolve => ranker.close(resolve)))
   let reads = 0
+  const recommendations = []
   const { home, workspace, runtime, events } = await fixture(t, {
     rankEnv: { TYPESAFE_BASE_URL: 'http://127.0.0.1:' + ranker.address().port },
-    resolveRecord: async record => { reads++; return { path: record.path } }
+    onRecommendations: (workspaceId, rows) => { assert.equal(workspaceId, 'project'); recommendations.push(...rows) },
+    resolveRecord: async record => { reads++; return record.kind === 'skill' ? { path: record.path } : { command: process.execPath, args: ['-e', fake] } }
   })
   const skill = { id: 'ui', kind: 'skill', name: 'interface guide', description: 'Accessible UI' }
   const storage = { id: 'db', kind: 'skill', name: 'schema guide', description: 'SQL schemas' }
@@ -353,22 +356,52 @@ test('a local task recommendation considers only skills approved for this handle
   await grantSkills(storage)
   const query = 'Fix icon contrast'
   const before = await access(home, workspace, 'recommend', { session, query })
-  assert.deepEqual(before.result, { method: 'kev', items: [skill] })
-  assert.deepEqual(received[0].state, { task: query, skills: { s0: 'interface guide: Accessible UI' } })
-  assert.deepEqual((await access(home, workspace, 'recommend', { query })).result.items, [storage])
+  assert.equal(before.result.method, 'kev')
+  assert.deepEqual(before.result.items.map(i => i.id), [skill.id, item.id])
+  assert.deepEqual(received[0].state, { task: query, capabilities: { s0: 'MCP server: Fixture MCP. count values', s1: 'Skill: interface guide. Accessible UI' } })
+  const [skillRec, serverRec] = recommendations
+  assert.deepEqual(Object.keys(skillRec).sort(), ['at','id','kind','name'])
+  assert.deepEqual((await access(home, workspace, 'recommend', { query })).result.items.map(i => i.id), [storage.id, item.id])
   assert.equal(reads, 0)
   assert.equal(events.length, 0)
   const read = await access(home, workspace, 'skill', { session, id: before.result.items[0].id })
   assert.equal(read.result.content, 'Private full instructions.')
   assert.equal(reads, 1)
   assert.equal(events.at(-1).state, 'succeeded')
+  assert.equal(events.at(-1).recommendationId, skillRec.id)
+  const { session: other } = (await access(home, workspace, 'start')).result
+  const callServer = session => access(home, workspace, 'call', { session, id: record.id, tool: 'counter', arguments: {} })
+  await callServer(other)
+  assert.equal(events.at(-1).recommendationId, undefined)
+  await access(home, workspace, 'tools', { session, id: record.id })
+  assert.equal(events.at(-1).recommendationId, undefined)
+  await access(home, workspace, 'call', { session, id: record.id, tool: 'unadvertised-private-text', arguments: {} })
+  assert.equal(events.at(-1).state, 'failed')
+  assert.equal(events.at(-1).recommendationId, undefined)
+  assert.equal(events.at(-1).name, 'Fixture MCP')
+  await callServer(session)
+  assert.equal(events.at(-1).capabilityName, 'Fixture MCP')
+  assert.equal(events.at(-1).name, 'Fixture MCP · counter')
+  assert.equal(events.at(-1).recommendationId, serverRec.id)
+  assert.equal(events.at(-2).recommendationId, serverRec.id)
+  assert.equal(events.at(-1).operation, 'call')
+  const count = recommendations.length
+  modelAvailable = false
+  const fallback = await access(home, workspace, 'recommend', { session, query: 'count' })
+  assert.equal(fallback.result.method, 'keywords')
+  assert.deepEqual(fallback.result.items.map(item => item.id), [record.id])
+  assert.equal(recommendations.length, count)
+  await callServer(session)
+  assert.equal(events.at(-1).recommendationId, undefined)
+  await access(home, workspace, 'end', { session })
+  assert.equal((await callServer(session)).error.code, 'SESSION_UNAVAILABLE')
 })
 
 test('a remote Jev configuration falls back to bounded keyword matches', async () => {
   const candidates = Array.from({ length: 6 }, (_, i) => ({ id: String(i), name: 'fixture', kind: 'skill', description: i ? 'interface' : 'storage' }))
   const env = { TYPESAFE_BASE_URL: 'https://api.typesafe.ai' }
-  assert.deepEqual(await recommendSkills('Improve interface', candidates, env), { method: 'keywords', items: candidates.slice(1, 4) })
-  assert.deepEqual((await recommendSkills('contrast', candidates, env)).items, [])
+  assert.deepEqual(await recommendCapabilities('Improve interface', candidates, env), { method: 'keywords', items: candidates.slice(1, 4) })
+  assert.deepEqual((await recommendCapabilities('contrast', candidates, env)).items, [])
 })
 
 test('restoring an enabled workspace upgrades an owned older launcher and preserves user instructions', async t => {
@@ -380,12 +413,12 @@ test('restoring an enabled workspace upgrades an owned older launcher and preser
   const manifestPath = join(base, 'bootstrap.json'), cli = join(base, 'auto-cli.mjs')
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
   const hash = value => createHash('sha256').update(value).digest('hex')
-  const older = (await readFile(ssot, 'utf8')).replace(/^- When a task would benefit[^\n]*\n/m, '')
+  const older = (await readFile(ssot, 'utf8')).replace(/^- When a skill or external tool[^\n]*\n/m, '')
   await writeFile(ssot, older)
   const actual = await realpath(ssot)
   const file = manifest.files.find(f => f.path === actual)
   file.blockHash = hash(older.match(/<!-- traffic-light:auto:start -->[\s\S]*?<!-- traffic-light:auto:end -->/)[0])
-  file.inserted = file.inserted.replace(/^- When a task would benefit[^\n]*\n/m, '')
+  file.inserted = file.inserted.replace(/^- When a skill or external tool[^\n]*\n/m, '')
   await writeFile(cli, 'old launcher')
   manifest.cliHash = hash('old launcher')
   await writeFile(manifestPath, JSON.stringify(manifest))

@@ -1,4 +1,4 @@
-import { classifyResources, type ResourceObservation } from './resource-classifier'
+import { classifyResources, nativeToolName, type ResourceObservation } from './resource-classifier'
 
 /** A deliberately narrow view of an Orca workspace agent's current reported activity. */
 export type NativeActivity = {
@@ -36,6 +36,11 @@ function workspaceRow(response: unknown, workspaceId: string): Record<string, un
   return matches.length === 1 ? matches[0] : null
 }
 
+/** A globally capped page may still contain the exact requested workspace. */
+export function missingFromPartialSnapshot(response: unknown, workspaceId: string): boolean {
+  return object(object(response)?.result)?.truncated === true && !workspaceRow(response, workspaceId)
+}
+
 /**
  * Extract only status labels for the exact workspace address. This intentionally does not
  * return agent prompts, tool inputs, assistant messages or any other fields from the response.
@@ -67,7 +72,7 @@ export function parseNativeActivity(response: unknown, workspaceId: string): Nat
     const state = agent?.state
     if (state !== 'working' && state !== 'blocked' && state !== 'waiting' && state !== 'done') continue
     const agentType = label(agent?.agentType)
-    activities.push({ agentType, state, toolName: label(agent?.toolName) })
+    activities.push({ agentType, state, toolName: typeof agent?.toolName === 'string' ? nativeToolName(agent.toolName, agent.toolInput) : null })
     addChildren(agent?.children, agentType, agent?.subagentObservation, 1)
   }
   return activities
@@ -100,34 +105,44 @@ export function parseNativeActiveResources(response: unknown, workspaceId: strin
   return resources
 }
 
-/** Only local structured sessions in the exact current workspace are eligible for local journal access. */
-export function nativeSessionIds(response: unknown, workspaceId: string): { ids: string[]; truncated: boolean } {
-  const row = workspaceRow(response, workspaceId)
-  if (!row || row.hostId !== 'local' || !Array.isArray(row.agents)) return { ids: [], truncated: false }
-  const ids = new Set<string>()
-  for (const value of row.agents) {
-    const agent = object(value)
-    if (agent?.structuredHostOwned !== true || typeof agent.paneKey !== 'string') continue
-    const match = /^structured-agent-session-([a-z][a-z0-9-]{0,31}_[a-f0-9]{8}_[a-f0-9]{4}_[a-f0-9]{4}_[a-f0-9]{4}_[a-f0-9]{12}):[^:]+$/.exec(agent.paneKey)
-    if (match) ids.add(match[1])
-  }
-  const all = [...ids]
-  return { ids: all.slice(0, 4), truncated: all.length > 4 }
+/** A journal ID must be one of the two canonical Orca forms, even when taken from a structured pane. */
+export const validSessionId = (value: string): boolean =>
+  /^(?:[a-z][a-z0-9-]{0,31}_[a-f0-9]{8}_[a-f0-9]{4}_[a-f0-9]{4}_[a-f0-9]{4}_[a-f0-9]{12}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(value)
+
+function sessionId(agent: Record<string, unknown> | null): string | null {
+  if (!agent || typeof agent.paneKey !== 'string' || agent.structuredHostOwned === false) return null
+  const id = /^structured-agent-session-([^:]+):[^:]+$/.exec(agent.paneKey)?.[1]
+  if (!id || !validSessionId(id)) return null
+  if (agent.orcaSessionId != null && agent.orcaSessionId !== id) return null
+  // Settled structured sessions can lose the live-ownership flag. Their explicit
+  // local session ID must still agree with the pane before its history can be read.
+  return agent.structuredHostOwned === true || (agent.state === 'done' && agent.orcaSessionId === id) ? id : null
 }
 
-/** Working sessions must also belong to the exact current workspace and host. */
-export function nativeWorkingSessionIds(response: unknown, workspaceId: string): Set<string> {
+export function nativeJournalSessions(response: unknown, workspaceId: string) {
   const row = workspaceRow(response, workspaceId)
-  if (!row || row.hostId !== 'local' || !Array.isArray(row.agents)) return new Set()
-  const eligible = new Set(nativeSessionIds(response, workspaceId).ids)
-  const working = new Set<string>()
-  for (const value of row.agents) {
-    const agent = object(value)
-    if (agent?.state !== 'working' || agent.structuredHostOwned !== true || typeof agent.paneKey !== 'string') continue
-    const match = /^structured-agent-session-([^:]+):[^:]+$/.exec(agent.paneKey)
-    if (match && eligible.has(match[1])) working.add(match[1])
+  const sessions = new Map<string, { id: string; agentType: string | null; working: boolean; updatedAt: number }>()
+  if (row?.hostId === 'local' && Array.isArray(row.agents)) {
+    for (const value of row.agents) {
+      const agent = object(value)
+      const id = sessionId(agent)
+      if (!agent || !id) continue
+      const working = agent.state === 'working'
+      if (sessions.get(id)?.working && !working) continue
+      sessions.set(id, { id, agentType: label(agent.agentType), working, updatedAt: typeof agent.updatedAt === 'number' ? agent.updatedAt : 0 })
+    }
   }
-  return working
+  const sorted = [...sessions.values()].sort((a, b) => Number(b.working) - Number(a.working) || b.updatedAt - a.updatedAt)
+  return { sessions: sorted.slice(0, 4), truncated: sorted.length > 4 }
+}
+
+export function nativeSessionIds(response: unknown, workspaceId: string): { ids: string[]; truncated: boolean } {
+  const { sessions, truncated } = nativeJournalSessions(response, workspaceId)
+  return { ids: sessions.map(s => s.id), truncated }
+}
+
+export function nativeWorkingSessionIds(response: unknown, workspaceId: string): Set<string> {
+  return new Set(nativeJournalSessions(response, workspaceId).sessions.filter(s => s.working).map(s => s.id))
 }
 
 /** Only live, working children of the exact local session can make their tool calls active. */
@@ -139,8 +154,8 @@ export function nativeWorkingChildIds(response: unknown, workspaceId: string): M
   const parents = new Map<string, Record<string, unknown>[]>()
   for (const value of row.agents) {
     const parent = object(value)
-    if (parent?.structuredHostOwned !== true || typeof parent.paneKey !== 'string') continue
-    const id = /^structured-agent-session-([^:]+):[^:]+$/.exec(parent.paneKey)?.[1]
+    if (!parent) continue
+    const id = sessionId(parent)
     if (!id || !eligible.has(id)) continue
     const group = parents.get(id) ?? []
     group.push(parent)
@@ -149,12 +164,20 @@ export function nativeWorkingChildIds(response: unknown, workspaceId: string): M
   for (const [id, group] of parents) {
     if (group.length !== 1 || group[0].subagentObservation !== 'live' || !Array.isArray(group[0].children)) continue
     const states = new Map<string, boolean>()
-    for (const value of group[0].children.slice(0, 50)) {
-      const child = object(value)
-      if (!child || typeof child.providerId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(child.providerId)) continue
-      const live = child.membership === 'live' && child.state === 'working'
-      states.set(child.providerId, states.has(child.providerId) ? false : live)
+    let budget = 50
+    const visit = (children: unknown[], depth: number, liveParent: boolean) => {
+      for (const value of children) {
+        if (--budget < 0) break
+        const child = object(value)
+        if (!child) continue
+        const live = liveParent && child.membership === 'live' && child.state === 'working'
+        if (typeof child.providerId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(child.providerId)) {
+          states.set(child.providerId, states.has(child.providerId) ? false : live)
+        }
+        if (depth < 3 && Array.isArray(child.children)) visit(child.children, depth + 1, live)
+      }
     }
+    visit(group[0].children, 1, true)
     result.set(id, new Set([...states].filter(([, live]) => live).map(([childId]) => childId)))
   }
   return result

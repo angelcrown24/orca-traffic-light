@@ -75,3 +75,20 @@ test('reports truncated results rather than claiming full history', async () => 
   const rows = Array.from({ length: 301 }, () => ({ kind: 'call', name: 'shell', input: '' }))
   assert.equal((await readJournalActivity(id, async () => [meta, ...rows])).status, 'truncated')
 })
+
+test('decodes Antigravity wrapper calls and file reads from a UUID session and omits free-form titles', async () => {
+  const uuid = '12345678-abcd-4123-9123-123456789abc'
+  assert.ok(journalQuery(uuid))
+  const base = { kind: 'call', seq: 5, idx: 0, at_ms: 1700000000000, state: 'completed', active: 0, is_root: 1 }
+  const r = await readJournalActivity(uuid, async () => [meta,
+    { ...base, name: 'execute', input: '{"ServerName":"jev","ToolName":"jev_rank","Arguments":{"private":"secret"}}' },
+    { ...base, idx: 1, name: 'Running view_file', input: '{"AbsolutePath":"/agent/skills/panel-design/SKILL.md"}' },
+    { ...base, idx: 2, name: 'read_file', input: '{"Path":"/agent/skills/probe/SKILL.md"}' },
+    { ...base, idx: 3, name: 'private question here?', input: '{}' },
+    { ...base, idx: 4, name: 'read_file', state: 'running', active: 0 },
+  ])
+  assert.deepEqual(r.resources.map(x => x.name), ['jev', 'panel-design', 'probe'])
+  assert.deepEqual(r.recentTools?.map(x => [x.name, x.state]), [['jev/jev_rank', 'completed'], ['view_file', 'completed'], ['read_file', 'completed'], ['read_file', 'unknown']])
+  assert.equal(JSON.stringify(r).includes('secret'), false)
+  assert.equal(JSON.stringify(r).includes('private question'), false)
+})

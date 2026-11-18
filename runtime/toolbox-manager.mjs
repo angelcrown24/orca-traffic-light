@@ -36,7 +36,7 @@ export function createToolboxManager({ getContext, getWorkspaces, post, loadSele
     if (!workspaces.has(id)) {
       const saved = await loadSelection(id)
       assertActive()
-      if (!workspaces.has(id)) workspaces.set(id, { selected: Array.isArray(saved) ? saved.filter(x => typeof x === 'string').slice(0, MAX_SELECTION) : [], bundle: null, events: [] })
+      if (!workspaces.has(id)) workspaces.set(id, { selected: Array.isArray(saved) ? saved.filter(x => typeof x === 'string').slice(0, MAX_SELECTION) : [], bundle: null, events: [], recommendations: [], recommendationUses: new Map() })
     }
     return workspaces.get(id)
   }
@@ -60,6 +60,16 @@ export function createToolboxManager({ getContext, getWorkspaces, post, loadSele
     const result = await scanNow()
     return { items: result.items, warnings: result.warnings }
   }
+  async function activity() {
+    const workspaceId = await context()
+    const current = workspaces.get(workspaceId)
+    if (!current) return { workspaceId, recommendations: [], events: [] }
+    const events = new Map()
+    for (const uses of current.recommendationUses.values()) for (const row of uses) events.set(row.id, row)
+    for (const row of current.events) events.set(row.id, row)
+    return { workspaceId, recommendations: current.recommendations.map(row => ({ ...row })),
+      events: [...events.values()].sort((a, b) => a.startedAt - b.startedAt).map(row => ({ ...row })) }
+  }
   async function state() {
     await initialize()
     const id = await context()
@@ -71,11 +81,25 @@ export function createToolboxManager({ getContext, getWorkspaces, post, loadSele
   }
   async function automation() {
     assertActive()
-    if (!automationPromise) automationPromise = Promise.resolve().then(() => automationFactory({ onEvent: event => {
+    if (!automationPromise) automationPromise = Promise.resolve().then(() => automationFactory({ onRecommendations: (workspaceId, rows) => {
       if (disposed) return
-      const current = workspaces.get(event.workspaceId)
+      const current = workspaces.get(workspaceId)
+      if (!current) return
+      const ids = new Set(rows.map(row => row.id))
+      current.recommendations = [...current.recommendations.filter(row => !ids.has(row.id)), ...rows].slice(-100)
+      const retained = new Set(current.recommendations.map(row => row.id))
+      for (const id of current.recommendationUses.keys()) if (!retained.has(id)) current.recommendationUses.delete(id)
+      post()
+    }, onEvent: ({ workspaceId, sessionId, ...event }) => {
+      if (disposed) return
+      const current = workspaces.get(workspaceId)
       if (!current) return
       current.events = [...current.events.filter(e => e.id !== event.id), event].slice(-100)
+      if (event.recommendationId && current.recommendations.some(row => row.id === event.recommendationId)) {
+        const uses = current.recommendationUses.get(event.recommendationId) ?? []
+        const recent = [...uses.filter(row => row.id !== event.id), event]
+        current.recommendationUses.set(event.recommendationId, recent.slice(-8))
+      }
       post()
     } })).then(async runner => {
       if (disposed) { await runner.close(); error('The plugin has stopped.') }
@@ -312,5 +336,5 @@ export function createToolboxManager({ getContext, getWorkspaces, post, loadSele
     if (!current.bundle || current.bundle.id !== bundleId) error('The prepared bundle changed. Refresh before copying.')
     return { copied: await clipboard(current.bundle.instructions) }
   }
-  return { catalog, state, select, prepare, revoke, copy, initialize, setAutomation, sync, compare, dispose }
+  return { catalog, activity, state, select, prepare, revoke, copy, initialize, setAutomation, sync, compare, dispose }
 }

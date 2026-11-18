@@ -1,7 +1,7 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { Call } from './protocol'
 import { createNativeReader, fetchSnapshot } from './native-reader'
-import { classifyResources, type ResourceObservation } from './resource-classifier'
+import { classifyResources, directJevCommand, type ResourceObservation } from './resource-classifier'
 import { createToolboxManager } from '../runtime/toolbox-manager.mjs'
 
 const toolboxManagers = new Set<ReturnType<typeof createToolboxManager>>()
@@ -11,7 +11,7 @@ export async function deactivate(): Promise<void> {
 }
 
 // Identifiers are used only to pair events. Inputs and outputs are never retained.
-type ObservedCall = { call: Call; order: number; callId?: string; resources: ResourceObservation[]; startedAt: number }
+type ObservedCall = { call: Call; order: number; callId?: string; lookup?: string | null; resources: ResourceObservation[]; startedAt: number }
 const LIMIT = 100
 // A missing completion hook must not leave a "currently active" badge indefinitely.
 const ACTIVE_MAX_AGE_MS = 5 * 60_000
@@ -37,6 +37,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     saveAutomation: entries => orca.storage.set('toolbox-automation', entries)
   })
   toolboxManagers.add(toolbox)
+  orca.panels.handle('toolbox.activity', toolbox.activity)
   orca.panels.handle('toolbox.catalog', toolbox.catalog)
   orca.panels.handle('toolbox.state', toolbox.state)
   orca.panels.handle('toolbox.select', toolbox.select)
@@ -64,7 +65,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const key = event.callId ? `id:${event.callId}` : `anonymous:${index}`
     const id = JSON.stringify([event.terminalId, key])
     calls.delete(key)
-    calls.set(key, { call: { id, tool: event.tool, agent: event.agent, state: 'running' }, order: index, callId: event.callId, resources: classifyResources(event.tool, event.input), startedAt: Date.now() })
+    calls.set(key, { call: { id, tool: event.tool, agent: event.agent, state: 'running' }, order: index, callId: event.callId, lookup: directJevCommand(event.tool, event.input), resources: classifyResources(event.tool, event.input), startedAt: Date.now() })
     while (calls.size > LIMIT) calls.delete(calls.keys().next().value!)
     orca.panels.post('calls.changed', {})
   })
@@ -86,14 +87,14 @@ export default function activate(orca: OrcaWorkerApi): void {
       ? [exactKey, exact] as const : matches.length === 1 ? matches[0] : undefined
     if (chosen) {
       const [key, observed] = chosen
-      calls.set(key, { ...observed, call: { ...observed.call, state: 'finished' }, resources: mergeResources([...observed.resources, ...classifyResources(event.tool, event.input)]) })
+      calls.set(key, { ...observed, call: { ...observed.call, state: 'finished' }, lookup: observed.lookup ?? directJevCommand(event.tool, event.input), resources: mergeResources([...observed.resources, ...classifyResources(event.tool, event.input)]) })
     } else if (matches.length > 1) {
       for (const [key, observed] of matches) calls.set(key, { ...observed, call: { ...observed.call, state: 'uncertain' } })
     } else {
       // We saw an end but cannot identify its start. Keep it visible without claiming success.
       const index = ++order
       const key = `unpaired:${index}`
-      calls.set(key, { call: { id: JSON.stringify([event.terminalId, key]), tool: event.tool, agent: event.agent, state: 'uncertain' }, order: index, resources: classifyResources(event.tool, event.input), startedAt: Date.now() })
+      calls.set(key, { call: { id: JSON.stringify([event.terminalId, key]), tool: event.tool, agent: event.agent, state: 'uncertain' }, order: index, lookup: directJevCommand(event.tool, event.input), resources: classifyResources(event.tool, event.input), startedAt: Date.now() })
     }
     while (calls.size > LIMIT) calls.delete(calls.keys().next().value!)
     orca.panels.post('calls.changed', {})
@@ -110,7 +111,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const calls = context?.terminals.flatMap(({ id }) => [...(terminals.get(id)?.values() ?? [])]) ?? []
     calls.sort((a, b) => b.order - a.order)
     const now = Date.now()
-    return { workspace: Boolean(context), calls: calls.map(({ call }) => call), resources: mergeResources(calls.flatMap(({ resources }) => resources)),
+    return { workspace: Boolean(context), calls: calls.map(({ call, lookup }) => lookup ? { ...call, tool: lookup } : call), resources: mergeResources(calls.flatMap(({ resources }) => resources)),
       activeResources: mergeResources(calls.filter(({ call, startedAt }) => call.state === 'running' && now >= startedAt && now - startedAt <= ACTIVE_MAX_AGE_MS).flatMap(({ resources }) => resources)) }
   })
 }

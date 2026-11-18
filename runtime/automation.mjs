@@ -13,7 +13,7 @@ import {
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, relative, isAbsolute, sep } from 'node:path'
-import { recommendSkills } from './skill-recommend.mjs'
+import { recommendCapabilities } from './skill-recommend.mjs'
 import { createToolboxService } from './service.mjs'
 import { resolveRecord as defaultResolve } from './catalog.mjs'
 import {
@@ -182,13 +182,38 @@ export async function createAutomation(options = {}) {
     closed = false,
     activeRequests = 0,
     startingSessions = 0
-  function event(value) {
-    const owner = bundleOwners.get(value.bundleId)
-    if (owner) {
-      try {
-        options.onEvent?.({ ...value, workspaceId: owner.workspaceId, sessionId: owner.sessionId })
-      } catch {}
+  function event(value, itemId, dispatched) {
+    const session = bundleOwners.get(value.bundleId)
+    if (!session) return
+    // Capture attribution at the start: another recommendation may finish during a call.
+    if (value.state === 'running' && value.operation === 'skill') {
+      const match = session.recommended.get(itemId)
+      if (match) session.inFlight.set(value.id, match)
     }
+    const match = session.inFlight.get(value.id)
+    // Only a tool advertised by the server can reach dispatch.
+    if (dispatched && match) match.used = true
+    if (value.state !== 'running') session.inFlight.delete(value.id)
+    const recommendationId = dispatched && match?.id
+    try {
+      options.onEvent?.({ ...value, workspaceId: session.workspaceId, sessionId: session.id,
+        ...(recommendationId ? { recommendationId } : {}) })
+    } catch {}
+  }
+  function recordRecommendations(result, session, workspaceId) {
+    const current = new Map()
+    if (result.method === 'kev' && result.items.length) {
+      const at = Date.now()
+      const rows = result.items.map(item => {
+        const previous = session?.recommended.get(item.id)
+        const id = previous && !previous.used ? previous.id : randomUUID()
+        current.set(item.id, { id, used: false })
+        return { id, name: item.name, kind: item.kind, at }
+      })
+      // Legacy handle-free suggestions are visible, but cannot identify a conversation.
+      try { options.onRecommendations?.(workspaceId, rows) } catch {}
+    }
+    if (session) session.recommended = current
   }
   async function choose(cwd) {
     const path = await canonical(cwd)
@@ -249,11 +274,13 @@ export async function createAutomation(options = {}) {
           workspaceId: grant.workspaceId,
           workspacePath: grant.workspacePath,
           connection,
+          recommended: new Map(),
+          inFlight: new Map(),
           records: grant.records,
           items: grant.items
         }
         sessions.set(id, session)
-        bundleOwners.set(connection.id, { workspaceId: grant.workspaceId, sessionId: id })
+        bundleOwners.set(connection.id, session)
         return {
           session: id,
           workspace: grant.workspacePath,
@@ -280,10 +307,11 @@ export async function createAutomation(options = {}) {
       if (typeof request.query !== 'string' || !request.query.trim() || request.query.length > 256)
         throw reject('INVALID_QUERY', 'Describe the task in 1 to 256 characters.')
       const scope = session ?? grant
-      const skills = approvedMetadata(scope.records, scope.items).filter(item => item.kind === 'skill')
-      const result = await recommendSkills(request.query.trim(), skills, options.rankEnv)
+      const candidates = approvedMetadata(scope.records, scope.items)
+      const result = await recommendCapabilities(request.query.trim(), candidates, options.rankEnv)
       if (closed || (session ? !sessions.has(session.id) : grants.get(grant.workspaceId) !== grant))
         throw reject('WORKSPACE_CHANGED', 'The connection changed. Search again with the current selection.')
+      recordRecommendations(result, session, grant.workspaceId)
       return result
     }
     if (request.op === 'search')
@@ -367,7 +395,12 @@ export async function createAutomation(options = {}) {
         await refreshOwnedBootstrap(home)
         service = await createToolboxService({
           resolveRecord: options.resolveRecord ?? defaultResolve,
-          onEvent: event
+          onEvent: event,
+          onCallAttempt(bundleId, eventId, itemId) {
+            const session = bundleOwners.get(bundleId)
+            const match = session?.recommended.get(itemId)
+            if (match) session.inFlight.set(eventId, match)
+          }
         })
         const next = createServer(async (req, res) => {
           try {

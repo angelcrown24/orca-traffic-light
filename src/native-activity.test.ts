@@ -4,15 +4,15 @@ import { parseNativeActivity, parseNativeResources, nativeWorkingChildIds } from
 test('identifies only live working child provider IDs in the exact local workspace', () => {
   const sid = 'codex_12345678_abcd_1234_abcd_123456789abc'
   const parent = { structuredHostOwned: true, paneKey: `structured-agent-session-${sid}:pane`, state: 'working', subagentObservation: 'live', children: [
-    { providerId: 'live-child', membership: 'live', state: 'working' },
+    { providerId: 'live-child', membership: 'live', state: 'working', children: [{ providerId: 'live-grandchild', membership: 'live', state: 'working' }] },
     { providerId: 'done-child', membership: 'live', state: 'done' },
-    { providerId: 'stale-child', membership: 'stale', state: 'working' },
+    { providerId: 'stale-child', membership: 'stale', state: 'working', children: [{ providerId: 'unverified-grandchild', membership: 'live', state: 'working' }] },
     { providerId: 'unknown-child', state: 'working' },
     { providerId: 'ambiguous', membership: 'live', state: 'working' },
     { providerId: 'ambiguous', membership: 'live', state: 'working' }
   ] }
   const snapshot = { result: { worktrees: [{ hostId: 'local', address: { worktree: 'identity:one' }, agents: [parent] }] } }
-  assert.deepEqual([...nativeWorkingChildIds(snapshot, 'identity:one').get(sid)!], ['live-child'])
+  assert.deepEqual([...nativeWorkingChildIds(snapshot, 'identity:one').get(sid)!], ['live-child', 'live-grandchild'])
   assert.equal(nativeWorkingChildIds(snapshot, 'identity:other').size, 0)
   const stale = { result: { worktrees: [{ hostId: 'local', address: { worktree: 'identity:one' }, agents: [{ ...parent, subagentObservation: 'unverifiable' }] }] } }
   assert.equal(nativeWorkingChildIds(stale, 'identity:one').size, 0)
@@ -153,4 +153,19 @@ test('matches stable identity without substring or ambiguous matches', async () 
   assert.deepEqual(parseNativeActivity(ambiguous, 'identity:wt2:local:one'), [])
   assert.deepEqual(parseNativeResources(ambiguous, 'identity:wt2:local:one'), [])
   assert.deepEqual(nativeSessionIds(ambiguous, 'identity:wt2:local:one'), { ids: [], truncated: false })
+})
+
+test('selects current UUID and settled native sessions while rejecting mismatched ownership and prioritizing work', async () => {
+  const { nativeJournalSessions } = await import('./native-activity')
+  const ids = Array.from({ length: 7 }, (_, i) => '12345678-abcd-4123-9123-123456789ab' + i)
+  const agents = ids.map((id, i) => ({ orcaSessionId: id, paneKey: 'structured-agent-session-' + id + ':pane', agentType: 'antigravity', state: i === 6 ? 'working' : 'done', updatedAt: i,
+    ...(i === 6 ? { structuredHostOwned: true } : {}) }))
+  const data = { result: { worktrees: [{ hostId: 'local', worktreeId: 'this', agents: [
+    ...agents, { ...agents[6], orcaSessionId: ids[1] }, { ...agents[1], structuredHostOwned: false }
+  ] }] } }
+  const { sessions, truncated } = nativeJournalSessions(data, 'this')
+  assert.equal(truncated, true)
+  assert.deepEqual(sessions.map(s => s.id), [ids[6], ids[5], ids[4], ids[3]])
+  const mismatch = { result: { worktrees: [{ hostId: 'local', worktreeId: 'this', agents: [{ ...agents[6], orcaSessionId: ids[1] }, { ...agents[1], structuredHostOwned: false }] }] } }
+  assert.equal(nativeJournalSessions(mismatch, 'this').sessions.length, 0)
 })

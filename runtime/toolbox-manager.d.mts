@@ -1,4 +1,4 @@
-import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison } from '../src/toolbox-types'
+import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity } from '../src/toolbox-types'
 export function createToolboxManager(options: {
   getContext: () => Promise<{ workspaceId?: string } | null>
   getWorkspaces: () => Promise<{ workspaces: { id: string; path: string; hostId: string | null }[] }>
@@ -8,6 +8,7 @@ export function createToolboxManager(options: {
   loadAutomation?: () => Promise<unknown>
   saveAutomation?: (entries: { workspaceId: string; records: { id: string; fingerprint: string }[] }[]) => Promise<unknown>
 }): {
+  activity(): Promise<ToolboxActivity>
   catalog(): Promise<ToolboxCatalog>
   state(): Promise<ToolboxState>
   select(input: { workspaceId: string; ids: string[] }): Promise<ToolboxState>

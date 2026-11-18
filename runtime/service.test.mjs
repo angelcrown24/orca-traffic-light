@@ -83,7 +83,7 @@ test('tool errors generate failure events, with no arguments or outputs retained
   assert.equal(result.result.isError, true)
   assert.equal(events.at(-1).state, 'failed')
   assert.equal(events.filter(x => x.state === 'running').length, 2)
-  assert.ok(events.every(x => Object.keys(x).every(k => ['id','bundleId','name','kind','state','startedAt','finishedAt'].includes(k))))
+  assert.ok(events.every(x => Object.keys(x).every(k => ['id','bundleId','name','kind','state','startedAt','finishedAt','operation','capabilityName'].includes(k))))
   assert.ok(!JSON.stringify(events).includes('private-input'))
 })
 
