@@ -1,5 +1,6 @@
 import { assert, mockHost, mount, test } from 'orca/testing'
 import * as panel from './panel'
+import { panelLanguage } from './panel-language'
 import type { ToolboxCatalog, ToolboxState } from './toolbox-types'
 
 const catalog: ToolboxCatalog = { items: [
@@ -9,6 +10,28 @@ const catalog: ToolboxCatalog = { items: [
 ], warnings: [] }
 const initial = (): ToolboxState => ({ workspaceId: 'workspace-a', selected: [], bundle: null, events: [] })
 const calls = () => ({ workspace: true, calls: [] })
+
+test('uses English by default and reserves Korean for Korean language tags', () => {
+  for (const locale of [undefined, null, '', 'en-AU', 'fr-FR', 'kok-IN', 'koi']) {
+    assert.equal(panelLanguage(locale), 'en')
+  }
+  for (const locale of ['ko', 'ko-KR', ' KO_KR ']) assert.equal(panelLanguage(locale), 'ko')
+})
+
+test('renders English throughout the panel when the host language has no translation', async () => {
+  const host = mockHost({ requests: { 'calls.get': calls, 'toolbox.catalog': () => catalog, 'toolbox.state': initial } })
+  const view = await mount(panel, { host, locale: 'kok-IN' })
+  try {
+    assert.ok(view.find({ text: 'Detected items' }))
+    await view.select({ label: 'Traffic Light views' }, 'library')
+    assert.ok(view.find({ text: 'Skill · Codex' }))
+    await view.press({ text: 'Import 1' })
+    assert.ok(view.find({ text: 'Needs review' }))
+    await view.select({ label: 'Traffic Light views' }, 'structure')
+    assert.ok(view.find({ text: 'Discovered: 1 skill · 2 MCP servers' }))
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
 
 test('discovers metadata only when a catalog view is opened', async () => {
   let scans = 0

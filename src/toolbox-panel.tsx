@@ -1,4 +1,5 @@
 import { atom, Badge, Box, Button, Callout, Checkbox, CodeView, Collapsible, EmptyState, env, Heading, IconButton, Input, on, plugin, read, RelativeTime, Row, Separator, set, Stack, Switch, Text, type PanelContext } from 'orca'
+import { panelLanguage } from './panel-language'
 import type { CatalogItem, SyncResult, ToolboxCatalog, ToolboxState } from './toolbox-types'
 import './protocol'
 import { ArchitectureDiagram } from './toolbox-architecture'
@@ -28,7 +29,7 @@ const copy = {
   en: {
     autoTitle: 'New sessions', autoToggle: 'Connect automatically in new sessions', autoHelp: 'Apply this selection to new supported agent sessions. Existing conversations keep their previous configuration.', autoStop: 'Turning this off closes shared tool connections in this workspace. Conversations remain open.', autoOn: 'Enabled', autoOff: 'Off', apply: 'Apply selection', pending: 'Selection has unapplied changes.', autoError: 'Could not apply automatic connection settings.', providerStatus: 'Connection setup', bridgeReady: 'Bridge installed', bridgeMissing: 'Not set up', sessionCount: 'Connected sessions', manual: 'Manual connection', manualHelp: 'For an agent without the automatic bridge, prepare a guide and paste it into one conversation.', shared: 'Shared', providerOnly: 'Provider source', update: 'Update available', conflict: 'Conflict', sync: 'Add to shared store', syncUpdate: 'Update shared copy', syncSelected: 'Sync selected', syncHelp: 'Only the selected supported items are copied into the shared store. Existing conflicts are not overwritten.', syncError: 'Could not sync this selection.', syncResults: 'Sync results', synced: 'Synced', unchanged: 'Up to date', syncFailed: 'Failed', legend: 'MCP counts servers. The same item can appear under more than one provider.', totals: 'Catalog counts are unique entries, not a sum of the provider nodes.', structureRefresh: 'Refresh counts',
     connect: 'Connect', applied: 'Applied', settings: 'Connection settings', allShort: 'All', selectedShort: 'Selected', sharingShort: 'To share', detailsFor: 'Details',
-    idle: 'On demand', skills: 'Skills', mcp: 'MCP servers', selected: 'Selected', search: 'Search capabilities', searchPlaceholder: 'Name, purpose or provider…',
+    idle: 'On demand', skill: 'Skill', skills: 'Skills', mcp: 'MCP servers', selected: 'Selected', search: 'Search capabilities', searchPlaceholder: 'Name, purpose or provider…',
     filter: 'Show', all: 'All types', selectedOnly: 'Selected only', needsSharing: 'Needs sharing or update', refresh: 'Refresh library', clear: 'Clear selection',
     loading: 'Reading local capability metadata…', empty: 'No capabilities found', emptyHelp: 'Install skills or MCP tools locally, then refresh this library.', noMatch: 'No matching capabilities', noMatchHelp: 'Try another search or show all types.',
     unavailable: 'Unavailable', details: 'Details', foundIn: 'Found in', source: 'Source', noDescription: 'No description supplied.',
@@ -49,7 +50,7 @@ const copy = {
   ko: {
     autoTitle: '새 대화 연결', autoToggle: '새 세션에 자동 연결', autoHelp: '선택한 구성을 지원되는 새 에이전트 세션에 적용합니다. 기존 대화는 이전 구성을 유지합니다.', autoStop: '끄면 이 작업공간의 공용 도구 연결이 종료됩니다. 대화는 유지됩니다.', autoOn: '켜짐', autoOff: '꺼짐', apply: '선택 적용', pending: '아직 적용하지 않은 선택이 있습니다.', autoError: '자동 연결 설정을 적용하지 못했습니다.', providerStatus: '연결 준비 상태', bridgeReady: '연결 지침 설치됨', bridgeMissing: '설정되지 않음', sessionCount: '연결된 세션', manual: '수동 연결', manualHelp: '자동 연결을 지원하지 않는 에이전트에는 사용 안내를 만들어 대화 하나에 전달할 수 있습니다.', shared: '공용', providerOnly: '제공자 원본', update: '업데이트 있음', conflict: '충돌', sync: '공용으로 모으기', syncUpdate: '공용본 업데이트', syncSelected: '선택 항목 동기화', syncHelp: '선택한 지원 항목만 공용 저장소에 복사합니다. 충돌한 기존 항목은 덮어쓰지 않습니다.', syncError: '선택한 항목을 동기화하지 못했습니다.', syncResults: '동기화 결과', synced: '동기화됨', unchanged: '최신 상태', syncFailed: '실패', legend: 'MCP는 서버 수입니다. 같은 항목이 여러 제공자에 중복 표시될 수 있습니다.', totals: '카탈로그 수는 중복을 정리한 항목 수이며, 제공자별 수를 더한 값이 아닙니다.', structureRefresh: '개수 새로고침',
     connect: '연결', applied: '적용됨', settings: '연결 설정', allShort: '전체', selectedShort: '선택', sharingShort: '공용화 필요', detailsFor: '상세 정보',
-    idle: '필요할 때만', skills: '스킬', mcp: 'MCP 서버', selected: '선택됨', search: '기능 검색', searchPlaceholder: '이름, 용도, 제공자 검색…',
+    idle: '필요할 때만', skill: '스킬', skills: '스킬', mcp: 'MCP 서버', selected: '선택됨', search: '기능 검색', searchPlaceholder: '이름, 용도, 제공자 검색…',
     filter: '표시 종류', all: '모든 종류', selectedOnly: '선택한 항목만', needsSharing: '공용화 필요한 항목만', refresh: '목록 새로고침', clear: '선택 비우기',
     loading: '설치된 기능의 정보를 읽는 중…', empty: '찾은 기능이 없습니다', emptyHelp: '로컬에 스킬이나 MCP 도구를 설치한 뒤 목록을 새로고침하세요.', noMatch: '검색 결과가 없습니다', noMatchHelp: '검색어를 바꾸거나 모든 종류를 표시해 보세요.',
     unavailable: '사용 불가', details: '자세히', foundIn: '발견 위치', source: '출처', noDescription: '등록된 설명이 없습니다.',
@@ -68,7 +69,7 @@ const copy = {
     nativeHelp: '제공자 전용 내장 도구와 비공개 플러그인을 공용 도구로 변환하지는 않습니다.',
   }
 } as const
-const text = () => env.locale.toLowerCase().startsWith('ko') ? copy.ko : copy.en
+const text = () => copy[panelLanguage(env.locale)]
 
 export async function openToolbox(force = false): Promise<void> {
   if (!force && read(loaded)) { await refreshState(); return }
@@ -198,7 +199,7 @@ function Item({ item }: { item: CatalogItem }) {
       <IconButton icon={expanded ? 'collapse' : 'expand'} label={`${t.detailsFor}: ${item.name}`} tooltip={t.details} variant="ghost" size="sm" onPress={() => set(expandedItem, expanded ? null : item.id)} />
     </Row>
     <Row justify="between" align="center" gap="xs">
-      <Box grow minWidth={0}><Text muted size="xs" truncate>{`${item.kind === 'skill' ? t.skills : 'MCP'} · ${source}`}</Text></Box>
+      <Box grow minWidth={0}><Text muted size="xs" truncate>{`${item.kind === 'skill' ? t.skill : 'MCP'} · ${source}`}</Text></Box>
       {!item.available ? <Badge tone="warning">{t.unavailable}</Badge> : item.sharing?.state === 'conflict' || item.sharing?.state === 'update' ? <Badge tone="warning">{item.sharing.state === 'conflict' ? t.conflict : t.update}</Badge> : item.sharing ? <Text muted size="xs">{item.sharing.state === 'shared' ? t.shared : t.providerOnly}</Text> : null}
     </Row>
     {expanded ? <Stack gap="sm">
@@ -258,13 +259,13 @@ function changeView(value: 'store' | 'import') {
 
 function StoreRow({ group }: { group: SourceGroup }) {
   if (group.items.length === 1) return <Item item={group.items[0]} />
-  const ko = env.locale.toLowerCase().startsWith('ko')
+  const ko = panelLanguage(env.locale) === 'ko'
   const title = ko ? group.name + ' · 원본 ' + group.items.length + '개' : group.name + ' · ' + group.items.length + ' sources'
   return <Box padding="sm"><Collapsible title={title}><Stack gap="xs">{group.items.map(item => <Item key={item.id} item={item} />)}</Stack></Collapsible></Box>
 }
 
 export function ToolboxPanel() {
-  const ko = env.locale.toLowerCase().startsWith('ko'), t = text(), current = read(state), items = read(catalog).items
+  const ko = panelLanguage(env.locale) === 'ko', t = text(), current = read(state), items = read(catalog).items
   const automation = current.automation, importing = read(libraryMode) === 'import'
   const showSettings = read(settingsOpen) ?? read(manualOpen)
   const store = sourceGroups(items.filter(isShared))
@@ -319,7 +320,7 @@ export function ToolboxPanel() {
   </Stack>
 }
 export function ArchitecturePanel() {
-  const t = text(), ko = env.locale.toLowerCase().startsWith('ko')
+  const t = text(), ko = panelLanguage(env.locale) === 'ko'
   return <Stack gap="md">
     <Row justify="between" align="center" gap="sm" wrap><Heading level={2}>{t.structureTitle}</Heading><Button icon="refresh" size="sm" variant="ghost" disabled={read(loading) || read(busy)} onPress={() => openToolbox(true)}>{t.structureRefresh}</Button></Row>
     <Text muted size="sm">{t.legend}</Text>

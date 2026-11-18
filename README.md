@@ -1,113 +1,79 @@
 # Traffic Light for Orca
 
-An Orca sidebar for agent activity and a shared, on-demand library of local skills and MCP tools. Inspired by [traffic-light](https://github.com/jueyi6/traffic-light) (MIT-0).
+See which skills and tools your agents use, and share the ones a workspace needs across providers. Traffic Light adds a sidebar to Orca with an activity feed, a shared library, and a diagram of how the two connect.
 
-## Shared library / 공용 도구
-
-**Connect once, choose for the workspace, load only when needed.** Traffic Light has three tabs: **Activity**, **Library**, and **How it works** (Korean labels follow Orca's language).
-
-1. Open **Library / 공용 도구 → Import / 가져오기**. Each skill or MCP name appears once per type. Add a single source directly, choose a provider when configurations differ, or compare with the copy already in the shared library.
-2. In **Shared library / 공용 보관함**, choose up to 24 items for the current local workspace. Nothing is selected by default; browsing or selecting never starts an MCP server.
-3. Press **Connect / 연결** in the selection bar. This installs a short shared instruction block and local launcher once. Subsequent sessions that load these instructions can search and use the selected capabilities without a pasted guide. Connection switches and manual setup are under **Connection settings / 연결 설정**.
-4. The agent uses its existing shell tool to search a small amount of metadata, create its own connection handle, and read only a requested skill or discover/call only a requested MCP server. Changing the selection requires **Apply selection**; existing handles retain their prior selection.
-5. **Shared runner activity** shows actual start/completion/failure events for these requests. A skill read records content delivery, not proof that a model keeps applying it.
-
-Automatic setup writes an owned block to `~/.agents/AGENTS.md`, preserves existing instruction symlinks, and adds short bridges in Codex, Gemini and Claude user instruction files where needed. Antigravity and Gemini share the `~/.gemini/GEMINI.md` bridge. The connection settings show whether that bridge is installed. Existing bytes are backed up and unrelated instructions are preserved; edited managed blocks cause a conflict instead of being overwritten. The launcher lives in `~/.agents/traffic-light/auto-cli.mjs`. Provider MCP settings and authentication files are never rewritten.
-
-This requires **local Node.js 18+**, shell access, and an agent that loads and follows the shared instructions. Orca's plugin API cannot force instruction refresh in already-running native conversations or inject new native MCP tools. **Manual connection** remains a collapsed fallback for those conversations; restarting them is unnecessary. Existing provider-native MCP registrations and skill catalogs remain independent, so the plugin cannot remove context the provider already loads itself.
-
-Import compares MCP connection settings or a skill’s complete package on demand. An existing shared copy can be compared before making a choice. Differences are summarized by category, and matching packages are marked **Already shared**. Importing a source and granting it to an agent are separate actions. The architecture tab displays a connected diagram with current provider, shared-store, workspace and runtime counts. Counts distinguish **skills** from **MCP servers**; individual server tools are discovered only when requested.
-
-```mermaid
-flowchart TD
-  Codex[Codex skills / MCP] --> Catalog[Local catalog + shared store]
-  Claude[Claude skills / MCP] --> Catalog
-  Gemini[Gemini / Antigravity skills / MCP] --> Catalog
-  Catalog --> Selected[Workspace allowlist]
-  Selected --> Bridge[Automatic shared instructions]
-  Bridge --> Runner[One connection handle per conversation]
-  Runner --> Skill[Read a selected skill on demand]
-  Runner --> MCP[Connect a selected MCP on demand]
-  Runner -. Request events .-> Activity[Traffic Light]
-```
-
-### Bringing provider-only capabilities into the shared store
-
-Skill synchronization includes the package's supporting files. Managed shared snapshots keep previous versions intact; `~/.agents/skills/<name>` points to the current shared version, and missing provider skill entries link to that common location. Original provider packages are retained. Source changes appear as an update to synchronize explicitly. Different existing destinations are reported as conflicts, never overwritten.
-
-For MCP, synchronization records the source location and approved fingerprint in a private shared registry. Credentials remain in the original provider configuration and are resolved only when a server is requested. Source changes require explicit synchronization and application to new connections. This makes supported MCP servers callable through the shared runner without registering them in every provider's startup configuration. Provider-owned OAuth and proprietary built-in tools require their native connector. Stdio servers receive basic operating-system variables and environment entries explicitly supplied or inherited by their configuration.
-
-### How an agent can choose a skill or tool without its name
-
-In a connected workspace, the agent starts its own conversation handle and passes a brief task description to `--session HANDLE recommend`. The runner ranks the names and descriptions of approved skills and MCP servers from that handle's selection. It returns up to three suggestions using the local Kev decision model when available, with a local keyword fallback. A recommendation loads metadata only. The agent can then read the chosen skill or discover and call a tool on the chosen server.
-
-In **Activity → Detected items**, a **Jev** badge beside a skill or MCP server means the runner observed a skill read or tool call linked to a Jev recommendation in the same conversation. **Recent tool calls** puts the badge on the individual MCP invocation. Suggestions alone add no activity row. Direct Jev lookups appear in the ordinary tool history. Shared runner history clears when the plugin reloads.
-
-The portable skill is the instruction file and its supporting package. The consuming agent still needs the software and tools those instructions call for. The importer shows declared requirements. Skills with recognized native execution or invocation controls, including Claude hooks or forked context, Claude’s `disable-model-invocation`, and Codex’s explicit-only policy in `agents/openai.yaml`, stay with their native provider. This check covers package declarations; provider-level policies, installed dependencies and instructions embedded in arbitrary prose still depend on the consuming environment. See the [Agent Skills format](https://agentskills.io/specification), [Claude Code skills](https://code.claude.com/docs/en/skills), and [Codex skill policy](https://developers.openai.com/codex/skills/).
-
-### What is discovered
-
-Skills come from `~/.agents/skills`, `~/.codex/skills` (including `.system`), `~/.claude/skills`, `~/.gemini/skills`, and Antigravity skill folders. Canonical paths are deduplicated, so shared symlinks appear once. The plugin reads bounded local files to extract names/descriptions and detect source changes; it does not send the library's full content to a model. Skills over 64 KiB or beyond bounded traversal are omitted with a discovery note.
-
-MCP entries come from Codex TOML, Claude's user configuration, Gemini CLI settings and Antigravity's configuration. Equivalent configurations are deduplicated; different credentials or commands remain separate. Provider badges mean **where an entry was found**, not a verified connection or a native compatibility guarantee. Commands, environment values, URLs and credentials are kept out of the panel. Availability means a supported configuration, not that the server is running.
-
-The runner supports stdio and classic Streamable HTTP MCP protocols `2024-11-05`, `2025-03-26`, and `2025-06-18`. Legacy SSE, newer protocol-only servers, provider-managed OAuth, provider-native built-in tools, and unsupported per-tool restrictions are not silently converted. Disabled entries stay unavailable. A public API or separate adapter is needed for proprietary plugins and built-in features. Provider plugin caches, project-specific MCP settings and remote hosts are not enumerated in this release.
-
-### Runtime and lifecycle
-
-Preparing a bundle starts only a small loopback gateway; it does not connect any MCP servers. The gateway holds one MCP connection per selected server **per bundle** after it is requested, preserving that server's connection state between calls. Different bundles have different connections and working directories. A source configuration change requires preparing a new bundle rather than silently changing its identity or permissions.
-
-Selections and approved automatic workspace grants persist. Restoration checks approved source fingerprints; changed or missing sources pause automatic access until reviewed and applied again. Routing uses the caller's canonical working directory, never the focused UI tab. Every `start` creates a separate conversation handle; keep it for subsequent calls and `end` it when finished. Nested workspaces use the closest enabled workspace path.
-
-Turning off automatic access revokes its workspace handles and cancels their running requests; agent conversations remain open. Plugin reload/update/disable expires handles; an agent can create a new handle without restarting its conversation. Applying a changed selection affects new handles only. Manual prepared bundles are immutable and separately revoked. Idle MCP connections expire after 15 minutes; explicit `reconnect` starts a new connection and does not restore prior server state.
-
-Failures are returned only to the calling CLI request. Requests have time/size limits and are not automatically retried. A timed-out or cancelled write may already have changed the external application. The plugin never claims those side effects were rolled back. It does not require Unity, Figma, or other applications to be running just to browse or prepare a selection.
-
-Automatic search returns at most ten matching metadata entries, without reading all selected skills or starting all selected servers. Skill text, requested schemas and tool results still consume model context/tokens when used; this feature does not make them free or enforce the model's tool-selection behavior.
-
-### Access and privacy
-
-The trusted worker can read local capability files, manage shared skill copies and instruction blocks, and run selected server commands with this OS user's access. A selection is an **allowlist, not a filesystem sandbox**. Underlying tools retain their own permissions. Conversation handles separate runner connections, but external HTTP applications may share their own global state. Reusing a manual guide or automatic handle shares its server connection; keep one handle per conversation.
-
-Connection secrets are generated locally and stored in private files under `~/.agents/traffic-light` (mode 0600 on POSIX). They are never displayed in the panel or CLI output. The local gateways validate authorization and origin/host headers; another live plugin instance cannot take over an active automatic connection. Provider credentials are resolved from the original configuration/environment only when connecting and are not copied into bundle files. These controls trust the same OS user; they do not sandbox that user's other processes.
-
-The gateway returns tool results to the invoking agent and keeps only bounded request name/status/timestamps for the panel. It does not persist arguments, results or server stderr. Invoked tools may contact their own services or produce their own logs. After an abrupt worker exit an expired bundle file can remain, but its old gateway token is no longer usable once the process is gone.
-
-## Activity tab
-
-The panel lists skill, plugin and MCP names found in tool calls and skill file paths. A path reference alone does not prove execution. The list is incomplete and an absent name does not imply it was unused.
-
-The agent activity section also shows subagents and their reported states when Orca exposes them. A state Orca cannot verify is shown as unverified.
-
-**In use** marks names detected during an ongoing agent turn in the current workspace, or during a running local terminal tool call. The badge clears when the turn or call ends. Detection may miss activity or match a referenced path that was not actually executed. If a terminal call's completion event is lost, its badge expires after five minutes; very long calls may therefore lose their badge early.
-
-
-**Recent tool calls** groups calls from native chats, the shared runner and local terminals in the current workspace. With chat activity enabled, native entries show the provider, tool name and status reported by Orca. MCP calls with a verified native identity show the server and tool. Shared-runner entries show the called tool and request outcome.
-
-For terminal calls, **Awaiting finish** means the start was observed and **Finished** means the end was observed. If an end event is lost, a call can remain pending. When a call ID is absent, an end is matched only if exactly one pending call for the same terminal, agent and tool fits. Ambiguous or unpaired events are marked **Uncertain**. Calls are filtered to terminals currently listed in the focused workspace, so calls from a closed terminal no longer appear. Up to 100 calls per terminal and 100 recently active terminals are held in memory until the worker restarts.
-
-The plugin does not retain tool inputs or outputs. It does receive them from Orca as part of the hook events; only the agent name, tool name and identifiers are kept in memory. Activity monitoring does not send these observations to a server. The separate shared runner can connect to MCP endpoints you select and invoke.
-
-## Optional current activity for native chats
-
-The panel offers **Show current native chat activity**, disabled by default. When enabled and the panel is visible, the plugin runs `orca worktree ps --json` approximately every three seconds. Orca returns data for **all workspaces**, including agent prompts, tool inputs and assistant messages, to this plugin's worker process. The plugin displays only the current workspace's agent type, state, tool and detected resource names; it does not save, log or send the response or conversation contents. On macOS it also reads recent tool names and up to 8192 characters of each tool input, for at most 300 recent calls in up to four local native chat sessions in the current workspace, from Orca's local session journal. It does not query tool outputs or chat messages from the journal. Orca's internal journal schema is not a public API and can change; when unavailable or truncated the panel indicates this. Disable the switch to stop further reads. This requires a working local Orca CLI; failures are shown in the panel. The default command is `orca` on macOS and `orca-ide` on Linux. Windows has no default command; `ORCA_CLI_COMMAND` may specify a single executable path when available. The subprocess has a five-second timeout and a four-megabyte output limit.
-
-The journal reader handles both Orca session ID formats used by Codex, Claude and Antigravity. It prioritizes working chats, then recently updated chats. Recently finished calls remain visible after their turn ends. Up to 30 recent native calls are displayed across the sampled chats. The live view may miss brief calls, and the available history depends on which events Orca and each provider expose. The CLI snapshot may also include terminal agents.
-
-## Limitations
-
-Orca's hook API documents tool events for agents in local Orca terminals. SSH and WSL agents are not supported by those hooks; native chats use the optional view described above. The Activity tab is not an inventory and cannot reliably detect failures of native provider calls or report context occupancy/token costs. The Library tab separately discovers supported local configurations, and shared-runner events report their own request outcomes. An empty list means no calls were observed, not that no tools exist or were used.
+The sidebar follows Orca’s language. Korean locales use Korean. All other locales, including an unspecified language, use English. Tool names and descriptions appear as their authors supplied them.
 
 ## Install
 
-Requires Orca 1.4.261 or newer; the shared runner additionally requires local Node.js 18+. Run `orca plugin install angelcrown24/orca-traffic-light` and review the requested access and fingerprint in Orca's output before following its approval instructions. The plugin uses a trusted worker and workspace read, its own settings and storage access, plus tool before/after hooks. Automatic instruction setup and shared synchronization happen only through their explicit controls. Orca also supports installing a local clone with `orca plugin install /absolute/path/to/clone`.
+Requires **Orca 1.4.261 or later**. To share skills or run MCP tools, agents also need **Node.js 18+** and access to a local shell.
 
-Open the **Traffic Light** panel in Orca's right sidebar. Terminal calls are visible only when observed while the worker is running; supported native chats may also show recent journal activity.
+On Linux outside an Orca-managed terminal, use `orca-ide` in place of `orca` in the commands below.
+
+```sh
+orca plugin install angelcrown24/orca-traffic-light
+```
+
+Orca shows the publisher, requested permissions, and a command containing the approval fingerprint. Review the request, then run that command to finish installing. Open **Traffic Light** in Orca’s right sidebar.
+
+To update an existing installation, run the following command.
+
+```sh
+orca plugin update angelcrown24.traffic-light
+```
+
+[Release history](CHANGELOG.md) · [GitHub Releases](https://github.com/angelcrown24/orca-traffic-light/releases)
+
+## Watch an agent work
+
+Open **Activity** in the workspace you want to follow. Calls from local agent terminals appear as the plugin observes them. To include native chats, turn on **Settings & privacy → Show chat activity**. Expand **Recent tool calls** to see the provider, tool name, and reported state.
+
+| In the panel | What it tells you |
+| --- | --- |
+| **Detected items** | Skill, plugin, and MCP server names observed in calls or skill paths. |
+| **In use** | The item was observed in an ongoing agent turn or running request. |
+| **Jev** | The shared runner linked this skill read or MCP call to a Jev recommendation in the same conversation. |
+| **Agent activity** | The agent’s reported state, plus subagents when Orca supplies them. |
+
+<a href="docs/images/activity-en.png"><img src="docs/images/activity-en.png" width="390" alt="English Activity tab showing detected skills, inline Jev and In use badges, and agent activity"></a>
+
+## Share a skill or MCP tool
+
+For example, you can make a skill installed for Claude Code available to Codex in one workspace.
+
+1. In **Library → Import**, find the skill and press **Add**. When providers have different copies under the same name, use **Choose source** to select the one you want.
+2. In **Shared library**, select the skill or MCP server for this workspace. You can select up to 24 items. The initial selection is empty.
+3. Press **Connect**. Traffic Light installs shared instructions and a local launcher. Agents that load those instructions can search the selection, read a skill, or call a tool on demand. Browsing the library starts no MCP servers.
+4. After changing a selection, press **Apply selection**. New connections use the updated selection. For an existing conversation that has not loaded the instructions, open **Connection settings → Manual connection** to prepare a guide for that conversation.
+
+The **How it works** tab shows the path from provider installations through the shared store to the workspace selection and active connections. Its counts distinguish skills from MCP servers. Expand either image for the full-size English example.
+
+| Library | How it works |
+| --- | --- |
+| <a href="docs/images/library-en.png"><img src="docs/images/library-en.png" width="350" alt="English Library tab with workspace selection and skills and MCP servers in the shared library"></a> | <a href="docs/images/architecture-en.png"><img src="docs/images/architecture-en.png" width="350" alt="English How it works diagram with provider counts, shared store, workspace selection, and on-demand connections"></a> |
+
+All screenshots show example workspaces with sample data.
+
+## Compatibility and privacy
+
+- **Provider support.** The library reads local skill and MCP configurations for Codex, Claude Code, Gemini CLI, and Antigravity. Shared skills still need their declared tools and software. Provider-native features such as hooks and proprietary connectors may require their original provider.
+- **Chat monitoring.** This is off by default. When enabled, Orca’s status command can return prompts, tool inputs, and replies from all workspaces to the local worker. The panel displays activity for the focused workspace. On macOS it can also read recent native tool calls from Orca’s local journal. The monitor does not store or transmit chat content.
+- **Shared access.** You choose what each workspace can use. The runner starts the selected MCP server when requested, with the permissions of your OS account. Connected tools may contact their own services. Requested skill content, schemas, and results consume the agent’s context when used.
+
+For configuration paths, supported MCP versions, connection lifetimes, and monitoring limits, see the [technical reference](docs/reference.md).
 
 ## Development
 
-Run `node --test runtime/*.test.mjs`, `orca plugin validate . --json`, `orca plugin test . --json`, `orca plugin check . --json`, and `npx --package typescript tsc -p .`. Runtime tests use isolated temporary fixtures and synthetic MCP servers; they never rewrite real provider configuration. No npm install or build step is required for plugin users.
+```sh
+node --test runtime/*.test.mjs
+orca plugin validate . --json
+orca plugin test . --json
+orca plugin check . --json
+npx --package typescript tsc -p .
+```
+
+Runtime tests use temporary fixtures and synthetic MCP servers. Users can install the plugin directly from GitHub without a build step.
 
 ## License
 
-MIT-0. See [LICENSE](LICENSE). The vendored parsers retain their respective licenses: [smol-toml 1.9.1, BSD-3-Clause](runtime/vendor/smol-toml.LICENSE) and [js-yaml 5.5.0, MIT](runtime/vendor/js-yaml.LICENSE).
+Released under [MIT-0](LICENSE). Inspired by [traffic-light](https://github.com/jueyi6/traffic-light). The vendored parsers retain their own licenses. [smol-toml](runtime/vendor/smol-toml.LICENSE) · [js-yaml](runtime/vendor/js-yaml.LICENSE)

@@ -1,4 +1,5 @@
 import { atom, Badge, Box, Button, Collapsible, env, Heading, on, plugin, read, Row, Separator, set, settings, Stack, Switch, Tab, Tabs, Text, type PanelContext } from 'orca'
+import { panelLanguage } from './panel-language'
 import type { Call } from './protocol'
 import type { ToolboxActivity } from './toolbox-types'
 import type { NativeToolCall } from './native-reader'
@@ -134,7 +135,7 @@ const labels = {
     detected: 'Detected items', detectedHelp: 'Observed in tool calls, skill file paths and the shared runner. In use marks a running request or an ongoing agent turn.',
     skill: 'Skills', plugin: 'Plugins', mcp: 'MCP servers', none: 'No items detected yet',
     empty: 'An empty list does not mean an item was unused.', inUse: 'In use',
-    agent: 'Agent activity', subagents: 'Subagents', subagent: 'Subagent', agentNone: 'No agent activity reported.', agentOff: 'Turn on chat activity in settings to see agent status.', unavailable: 'Could not load chat activity.',
+    agent: 'Agent activity', agentName: 'Agent', subagents: 'Subagents', subagent: 'Subagent', agentNone: 'No agent activity reported.', agentOff: 'Turn on chat activity in settings to see agent status.', unavailable: 'Could not load chat activity.',
     truncated: 'Only recent chat history is shown.', historyUnavailable: 'Recent chat history is unavailable.',
     toolCalls: 'Recent tool calls', nativeCalls: 'Native chats', sharedCalls: 'Shared runner', terminalCalls: 'Terminals', callInProgress: 'Running', callDone: 'Completed', callFailed: 'Failed', nativeChat: 'Chat',
     toolNone: 'No tool calls observed yet.', noWorkspace: 'Open a workspace to see activity.',
@@ -152,7 +153,7 @@ const labels = {
     detected: '감지된 항목', detectedHelp: '도구 호출, 스킬 파일 경로, 공용 실행기에서 감지한 항목입니다. 현재 사용 중은 요청이나 에이전트 작업이 진행 중일 때 표시됩니다.',
     skill: '스킬', plugin: '플러그인', mcp: 'MCP 서버', none: '감지된 항목 없음',
     empty: '목록에 없어도 설치했거나 사용했을 수 있습니다.', inUse: '현재 사용 중',
-    agent: '에이전트 활동', subagents: '서브에이전트', subagent: '서브에이전트', agentNone: '보고된 에이전트 활동이 없습니다.', agentOff: '설정에서 채팅 활동을 켜면 상태를 볼 수 있습니다.', unavailable: '채팅 활동을 불러오지 못했습니다.',
+    agent: '에이전트 활동', agentName: '에이전트', subagents: '서브에이전트', subagent: '서브에이전트', agentNone: '보고된 에이전트 활동이 없습니다.', agentOff: '설정에서 채팅 활동을 켜면 상태를 볼 수 있습니다.', unavailable: '채팅 활동을 불러오지 못했습니다.',
     truncated: '최근 채팅 기록 일부만 표시합니다.', historyUnavailable: '최근 채팅 기록을 불러올 수 없습니다.',
     toolCalls: '최근 도구 호출', nativeCalls: '네이티브 채팅', sharedCalls: '공용 실행기', terminalCalls: '터미널', callInProgress: '실행 중', callDone: '완료', callFailed: '실패', nativeChat: '채팅',
     toolNone: '관측된 도구 호출이 없습니다.', noWorkspace: '작업공간을 열어 활동을 확인하세요.',
@@ -168,7 +169,7 @@ const labels = {
 } as const
 
 function ActivityPanel() {
-  const t = env.locale.toLowerCase().startsWith('ko') ? labels.ko : labels.en
+  const t = labels[panelLanguage(env.locale)]
   const items = read(calls)
   const snapshot = read(sharedActivity)
   const journalCalls = read(nativeTools)
@@ -203,7 +204,7 @@ function ActivityPanel() {
   const mainAgents = activities.filter((activity) => activity.role !== 'subagent')
   const subagents = activities.filter((activity) => activity.role === 'subagent')
   const activityRow = (activity: typeof activities[number], index: number, isSubagent: boolean) => <Row key={`${isSubagent ? 'sub' : 'main'}:${index}`} justify="between" align="center" gap="sm" wrap>
-    <Box minWidth={0} grow><Text size="sm" truncate>{(activity.label || activity.agentType || (isSubagent ? t.subagent : 'Agent')) + (activity.toolName ? ' · ' + activity.toolName : '')}</Text></Box>
+    <Box minWidth={0} grow><Text size="sm" truncate>{(activity.label || activity.agentType || (isSubagent ? t.subagent : t.agentName)) + (activity.toolName ? ' · ' + activity.toolName : '')}</Text></Box>
     <Badge tone={activity.state === 'working' ? 'accent' : activity.state === 'blocked' ? 'warning' : 'neutral'}>{stateNames[activity.state]}</Badge>
   </Row>
   return <Box direction="column" gap="lg">
@@ -296,7 +297,7 @@ function ActivityPanel() {
 }
 
 export default function Panel() {
-  const ko = env.locale.toLowerCase().startsWith('ko')
+  const ko = panelLanguage(env.locale) === 'ko'
   return <Box direction="column" gap="md" padding="md">
     <Heading>Traffic Light</Heading>
     <Tabs label={ko ? 'Traffic Light 보기' : 'Traffic Light views'} value={read(tab)} onChange={async value => {

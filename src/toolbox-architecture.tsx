@@ -1,4 +1,5 @@
 import { Badge, Box, Heading, Row, Stack, Text } from 'orca'
+import { englishCount } from './panel-language'
 import type { CatalogItem, ToolboxState } from './toolbox-types'
 
 const providers = ['Codex', 'Claude', 'Gemini', 'Antigravity']
@@ -35,7 +36,7 @@ export function ArchitectureDiagram({ items, state, ko }: { items: CatalogItem[]
     <Box direction="column" gap="sm" align="center" padding="md" border="accent" radius="md" background="accent">
       <Heading level={3}>{ko ? '공용 저장소' : 'Shared store'}</Heading>
       <Row gap="sm" wrap justify="center"><Badge tone="accent">{`${ko ? '스킬' : 'Skills'} ${data.shared.skills}`}</Badge><Badge tone="accent">{`${ko ? 'MCP 서버' : 'MCP servers'} ${data.shared.mcp}`}</Badge></Row>
-      <Text size="xs" muted>{ko ? `전체 발견: 스킬 ${data.catalog.skills} · MCP 서버 ${data.catalog.mcp}` : `Discovered: ${data.catalog.skills} skills · ${data.catalog.mcp} MCP servers`}</Text>
+      <Text size="xs" muted>{ko ? `전체 발견: 스킬 ${data.catalog.skills} · MCP 서버 ${data.catalog.mcp}` : `Discovered: ${englishCount(data.catalog.skills, 'skill')} · ${englishCount(data.catalog.mcp, 'MCP server')}`}</Text>
     </Box>
     <Stem />
     <Box direction="column" gap="sm" align="center" padding="md" border radius="md" background="card">

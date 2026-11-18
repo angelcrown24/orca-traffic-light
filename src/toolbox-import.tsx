@@ -1,4 +1,5 @@
 import { atom, Badge, Box, Button, Collapsible, env, plugin, read, Row, set, Stack, Text } from 'orca'
+import { englishCount, panelLanguage } from './panel-language'
 import type { CatalogItem, ToolboxComparison } from './toolbox-types'
 import './protocol'
 
@@ -29,7 +30,7 @@ const words = {
     contents: '내용', permissions: '권한', timeouts: '시간 제한'
   }
 }
-const labels = () => env.locale.toLowerCase().startsWith('ko') ? words.ko : words.en
+const labels = () => words[panelLanguage(env.locale)]
 const expanded = atom<string | null>(null)
 const comparison = atom<ToolboxComparison | 'loading' | 'error' | null>(null)
 const reviewed = atom<Record<string, 'same' | 'different'>>({})
@@ -132,7 +133,7 @@ function Sources({ group, disabled, add }: { group: SourceGroup; disabled: boole
       const matchingProviders = providers(matches)
       const facts = [item.source, info?.transport, info?.commandHint]
       const differences = result?.differences ?? []
-      if (info?.fileCount != null) facts.push(t === words.ko ? '파일 ' + info.fileCount + '개' : info.fileCount + ' files')
+      if (info?.fileCount != null) facts.push(t === words.ko ? '파일 ' + info.fileCount + '개' : englishCount(info.fileCount, 'file'))
       if (info?.envCount != null && differences.includes('environment')) facts.push(t.environment + ' ' + info.envCount)
       if (info?.argumentCount != null && differences.includes('arguments')) facts.push(t.arguments + ' ' + info.argumentCount)
       if (info?.headerCount != null && differences.includes('authentication')) facts.push((t === words.ko ? '헤더 ' : 'Headers ') + info.headerCount)
