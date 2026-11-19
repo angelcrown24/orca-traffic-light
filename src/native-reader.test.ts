@@ -158,7 +158,7 @@ test('uses an exact workspace returned on a truncated page and reports unavailab
   assert.equal((await read()).status, 'unavailable')
 })
 
-test('retains the latest native call from a quiet session while filling the rest by timestamp', async () => {
+test('keeps the 30 newest native calls across sampled chats in timestamp order', async () => {
   const busy = 'codex_12345678_abcd_1234_abcd_123456789abc'
   const quiet = '12345678-abcd-4123-9123-123456789abc'
   const agents = [[busy, 'codex'], [quiet, 'antigravity']].map(([id, agentType]) => ({
@@ -174,8 +174,8 @@ test('retains the latest native call from a quiet session while filling the rest
   }))
   const tools = (await read()).recentTools!
   assert.equal(tools.length, 30)
-  assert.deepEqual(tools.map(t => t.observedAt), [...Array.from({ length: 29 }, (_, i) => 129 - i), 2])
-  assert.equal(tools[29].agentType, 'antigravity')
+  assert.deepEqual(tools.map(t => t.observedAt), Array.from({ length: 30 }, (_, i) => 129 - i))
+  assert.ok(tools.every(t => t.agentType === 'codex'))
 })
 
 test('binds a Neon invocation to its exact conversation and provider', async () => {

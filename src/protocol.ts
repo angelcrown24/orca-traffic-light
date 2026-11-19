@@ -1,7 +1,8 @@
 import type { NativeResult } from './native-reader'
+import type { SessionShells } from './session-shells'
 import type { ResourceObservation } from './resource-classifier'
 import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity } from './toolbox-types'
-export type Call = { id: string; tool: string; agent: string; state: 'running' | 'finished' | 'uncertain' }
+export type Call = { id: string; tool: string; agent: string; state: 'running' | 'finished' | 'uncertain'; startedAt?: number }
 export {}
 declare module 'orca' {
   interface PluginRequests {
@@ -17,6 +18,7 @@ declare module 'orca' {
     'toolbox.compare': { input: { id: string }; output: ToolboxComparison }
     'toolbox.sync': { input: { workspaceId: string; ids: string[]; preserveProviderCopies?: boolean }; output: { results: SyncResult[]; catalog: ToolboxCatalog } }
     'native.get': { output: NativeResult }
+    'session.shells': { input: { selected: string | null }; output: SessionShells }
     'calls.get': { output: { calls: Call[]; workspace: boolean; resources?: ResourceObservation[]; activeResources?: ResourceObservation[] } }
   }
   interface PluginPanelEvents {

@@ -121,3 +121,26 @@ test('active terminal badges expire if the completion event is missing', async (
     assert.equal(expired.resources?.length, 1)
   } finally { Date.now = originalNow; await worker.deactivate() }
 })
+
+test('returns only 30 terminal history rows while tracking older live tools and their original start times', async () => {
+  const dateNow = Date.now
+  let now = 1000
+  const context = { branch: '', displayName: '', terminals: [{ id: 't1' }] }
+  const worker = await mountWorker(main, { host: mockHost({ results: { 'workspace.readContext': context } }) })
+  const base = { agent: 'codex', workspaceId: null, terminalId: 't1', input: null }
+  Date.now = () => now
+  try {
+    await worker.hooks.fire('agent.tool.before', { ...base, tool: 'mcp__older__read', callId: 'older' })
+    for (let i = 1; i <= 30; i++) {
+      now++
+      await worker.hooks.fire('agent.tool.before', { ...base, tool: 'Read', callId: String(i) })
+    }
+    const before = await worker.request('calls.get')
+    assert.deepEqual(before.calls.map(c => c.startedAt), Array.from({ length: 30 }, (_, i) => 1030 - i))
+    assert.ok(before.activeResources?.some(r => r.name === 'older'))
+    now++
+    await worker.hooks.fire('agent.tool.after', { ...base, tool: 'Read', callId: '30' })
+    const after = await worker.request('calls.get')
+    assert.deepEqual(after.calls[0], { ...before.calls[0], state: 'finished' })
+  } finally { Date.now = dateNow; await worker.deactivate() }
+})

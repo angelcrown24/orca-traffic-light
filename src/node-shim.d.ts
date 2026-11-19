@@ -5,6 +5,7 @@ declare module 'node:child_process' {
 declare const process: { platform: string; env: Record<string, string | undefined> }
 
 declare module 'node:fs/promises' {
+  export function readFile(path: string, encoding: 'utf8'): Promise<string>
   export function realpath(path: string): Promise<string>
   export function lstat(path: string): Promise<{ dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number; isFile(): boolean }>
 }

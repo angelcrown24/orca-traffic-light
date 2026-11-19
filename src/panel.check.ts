@@ -10,6 +10,7 @@ const catalog: ToolboxCatalog = { items: [
 const selection: ToolboxState = { workspaceId: 'demo', selected: ['design', 'figma'], bundle: null, events: [{ id: 'sample-call', bundleId: 'sample-session', name: 'figma-local', kind: 'mcp', state: 'running', startedAt: 1700000000000 }], automation: { enabled: true, setup: true, providers: [{ name: 'Codex', state: 'ready' }, { name: 'Gemini', state: 'ready' }, { name: 'Claude', state: 'ready' }], appliedIds: ['design', 'figma'], sessions: 1 } }
 const requests = {
   'calls.get': () => ({ workspace: true, calls: [] }),
+  'session.shells': () => ({ status: 'disabled' as const, options: [], selected: null, rows: [], subagents: [] }),
   'toolbox.activity': () => ({ workspaceId: 'demo', recommendations: [], events: [] }),
   'toolbox.catalog': () => catalog,
   'toolbox.state': () => selection,
@@ -17,12 +18,14 @@ const requests = {
 export default defineCheck({
   fresh: { requests },
   antigravityChild: { settings: { nativeActivity: true, antigravityChildStatus: true }, requests: { ...requests,
-    'native.get': () => ({ status: 'ready', resources: [], activities: [
-      { agentType: 'Antigravity', state: 'done', toolName: null },
-      { agentType: 'Antigravity', role: 'subagent', state: 'idle', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000041 }
-    ] })
+    'session.shells': () => ({ status: 'ready', options: [{ id: 'chat:demo', kind: 'chat', provider: 'Antigravity', number: 1 }], selected: 'chat:demo',
+      rows: [{ kind: 'background', name: 'node', state: 'running' }],
+      subagents: [{ agentType: 'Antigravity', role: 'subagent', state: 'working', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000041 }] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [] })
   } },
   jevBadges: { settings: { nativeActivity: true }, requests: { ...requests,
+    'session.shells': () => ({ status: 'ready', options: [{ id: 'chat:demo', kind: 'chat', provider: 'Codex', number: 1 }], selected: 'chat:demo',
+      rows: [{ kind: 'shell', name: 'zsh', state: 'running' }], subagents: [] }),
     'native.get': () => ({
       status: 'ready', journalStatus: 'ready', resources: [{ category: 'plugin', name: 'design-tools', evidence: 'observed' }],
       activities: [

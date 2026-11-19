@@ -32,186 +32,133 @@ test('clears stale calls on refresh failure and recovers on retry', async () => 
   await view.unmount()
 })
 
-test('native activity is off by default and only requested after explicit opt-in', async () => {
-  let requests = 0
-  const host = mockHost({ settings: { nativeActivity: false }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => { requests++; return { status: 'ready', activities: [{ agentType: 'codex', state: 'working', toolName: 'Read' }], resources: [] } }
-  } })
-  const view = await mount(panel, { host })
-  try {
-  assert.equal(requests, 0)
-  await view.toggle({ label: 'Settings & privacy' })
-  assert.equal(Boolean(view.find({ text: 'When on, workspace status can include prompts, tool inputs and replies from all workspaces. On macOS, recent tool inputs in this workspace are also read.' })), true)
-  await view.toggle({ label: 'Show chat activity' })
-  assert.equal(requests > 0, true)
-  assert.equal(Boolean(view.find({ text: 'codex · Read' })), true)
-  await view.toggle({ label: 'Show chat activity' })
-  assert.equal(view.find({ text: 'codex · Read' }), null)
-  } finally { await view.unmount() }
-})
-
-test('Antigravity status requires a separate opt-in and identifies the time and source of the last report', async () => {
-  const at = 1700000000000
-  let requests = 0
-  const host = mockHost({ requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => {
-      requests++
-      return { status: 'ready', resources: [], activities: [
-        { agentType: 'antigravity', state: 'done', toolName: null },
-        { agentType: 'antigravity', role: 'subagent', state: 'working', toolName: null, statusSource: 'antigravity', statusUpdatedAt: at }
-      ] }
-    }
-  } })
-  const view = await mount(panel, { host })
-  try {
-    const childSetting = { label: 'Show Antigravity subagent status' }
-    await view.toggle({ label: 'Settings & privacy' })
-    assert.equal(view.find(childSetting)?.disabled, true)
-    assert.equal(requests, 0)
-    await view.toggle({ label: 'Show chat activity' })
-    assert.equal(view.find(childSetting)?.disabled, false)
-    assert.equal(view.valueOf(childSetting), false)
-    assert.equal(view.find({ text: 'Subagents' }), null)
-    const initialRequests = requests
-    await view.toggle(childSetting)
-    assert.ok(requests > initialRequests)
-    assert.equal(host.data().settings.antigravityChildStatus, true)
-    assert.ok(view.find({ text: 'Antigravity · Last reported' }))
-    assert.ok(view.find({ type: 'Badge', text: 'Done' }))
-    assert.equal(view.find({ type: 'Badge', text: 'Working' })?.props.tone, 'neutral')
-    assert.equal(view.find({ type: 'RelativeTime' })?.props.at, at)
-    await view.toggle(childSetting)
-    assert.equal(view.find({ text: 'Subagents' }), null)
-    assert.equal(view.find({ text: 'Antigravity · Last reported' }), null)
-    assert.equal(host.data().settings.nativeActivity, true)
-    assert.deepEqual(view.errors, [])
-  } finally { await view.unmount() }
-})
-
-test('shows the localized idle report independently of a completed parent', async () => {
-  const host = mockHost({ settings: { nativeActivity: true, antigravityChildStatus: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [
-      { agentType: 'antigravity', state: 'done', toolName: null },
-      { agentType: 'antigravity', role: 'subagent', state: 'idle', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000000 }
-    ] })
-  } })
-  const view = await mount(panel, { host, locale: 'ko-KR' })
-  try {
-    assert.ok(view.find({ type: 'Badge', text: '완료' }))
-    assert.ok(view.find({ type: 'Badge', text: '대기' }))
-    assert.ok(view.find({ text: 'Antigravity · 마지막 보고' }))
-    await view.toggle({ label: '설정 및 개인정보' })
-    await view.toggle({ label: '채팅 활동 표시' })
-    assert.equal(view.find({ text: 'Antigravity · 마지막 보고' }), null)
-    assert.equal(view.find({ label: 'Antigravity 서브에이전트 상태 표시' })?.disabled, true)
-    assert.equal(host.data().settings.antigravityChildStatus, true)
-    assert.deepEqual(view.errors, [])
-  } finally { await view.unmount() }
-})
-
-test('shows live subagents separately and removes them when they are no longer reported', async () => {
-  let hasSubagents = true
-  const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [
-      { agentType: 'codex', state: 'working', toolName: null },
-      ...(hasSubagents ? [
-        { role: 'subagent' as const, label: 'review', agentType: 'codex', state: 'working' as const, toolName: null },
-        { role: 'subagent' as const, label: 'watch', agentType: 'codex', state: 'monitoring' as const, toolName: null },
-        { role: 'subagent' as const, label: 'audit', agentType: 'codex', state: 'unverifiable' as const, toolName: null }
-      ] : [])
-    ] })
-  } })
-  const view = await mount(panel, { host, locale: 'ko-KR' })
-  try {
-    assert.equal(Boolean(view.find({ text: 'codex' })), true)
-    assert.equal(Boolean(view.find({ text: '서브에이전트' })), true)
-    assert.equal(Boolean(view.find({ text: 'review' })), true)
-    assert.equal(Boolean(view.find({ text: 'audit' })), true)
-    assert.ok(view.find({ text: '모니터링 중' }))
-    assert.equal(view.find({ text: '실행 상태 미확인' }), null)
-    assert.equal(Boolean(view.find({ text: '확인 불가' })), true)
-    hasSubagents = false
-    await view.emit('workspace.changed', { context: null })
-    assert.equal(view.find({ text: '서브에이전트' }), null)
-    assert.equal(view.find({ text: 'review' }), null)
-    assert.equal(Boolean(view.find({ text: 'codex' })), true)
-    assert.deepEqual(view.errors, [])
-  } finally { await view.unmount() }
-})
-
-test('keeps each child under its own native chat when two parents have the same provider', async () => {
-  const host = mockHost({ settings: { nativeActivity: true, antigravityChildStatus: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [
-      { agentType: 'Antigravity', state: 'done', toolName: null },
-      { agentType: 'Antigravity', role: 'subagent', state: 'idle', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000000 },
-      { agentType: 'Antigravity', state: 'working', toolName: 'Read' },
-      { agentType: 'Antigravity', role: 'subagent', state: 'monitoring', toolName: null, label: 'review' }
-    ] })
-  } })
-  const view = await mount(panel, { host })
-  try {
-    const first = view.find({ type: 'Stack', text: /^Antigravity Done Subagents 1 / })
-    assert.ok(first?.text.includes('Antigravity · Last reported'))
-    assert.equal(first?.text.includes('review'), false)
-    const second = view.find({ type: 'Stack', text: /^Antigravity · Read Working Subagents 1 / })
-    assert.ok(second?.text.includes('review Monitoring'))
-    assert.equal(second?.text.includes('Last reported'), false)
-    assert.deepEqual(view.errors, [])
-  } finally { await view.unmount() }
-})
-
-for (const [locale, call, status] of [
-  ['en-US', 'Subagent call', 'Live status unavailable'],
-  ['ko-KR', '서브에이전트 호출', '실행 상태 미확인']
-]) {
-  test(`shows the timestamp of a delegation under its reporting parent without implying live work (${locale})`, async () => {
-    const at = 1700000000000
-    let observed = true
-    const host = mockHost({ settings: { nativeActivity: true }, requests: {
-      'calls.get': () => ({ workspace: true, calls: [] }),
-      'native.get': () => ({ status: 'ready', resources: [], activities: [
-        { agentType: 'codex', toolName: null, state: 'done' },
-        { agentType: 'antigravity', toolName: null, state: 'done', ...(observed ? { lastSubagentInvocationAt: at } : {}) }
-      ] })
-    } })
-    const view = await mount(panel, { host, locale })
-    try {
-      assert.ok(view.find({ type: 'Stack', text: new RegExp('^antigravity .*' + call) }))
-      assert.equal(view.findAll({ type: 'Text', text: call }).length, 1)
-      assert.ok(view.find({ text: status }))
-      assert.equal(view.find({ type: 'RelativeTime' })?.props.at, at)
-      assert.equal(view.find({ text: /^(Working|작업 중|In use|현재 사용 중|Subagents|서브에이전트)$/ }), null)
-      observed = false
-      await view.emit('workspace.changed', { context: null })
-      assert.equal(view.find({ text: call }), null)
-      assert.equal(view.find({ type: 'RelativeTime' }), null)
-      assert.deepEqual(view.errors, [])
-    } finally { await view.unmount() }
-  })
+const options = [
+  { id: 'chat:one', kind: 'chat' as const, provider: 'Codex', number: 1 },
+  { id: 'terminal:two', kind: 'terminal' as const, number: 1 }
+]
+const session = {
+  status: 'ready' as const, options, selected: 'chat:one',
+  rows: [{ kind: 'shell' as const, state: 'running' as const, name: 'zsh' }],
+  subagents: []
 }
 
-test('does not request native activity while the panel is hidden', async () => {
-  let requests = 0
+test('shows the selected session shells with its active subagents and removes completed and idle hosts', async () => {
+  const host = mockHost({ settings: { nativeActivity: true, antigravityChildStatus: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [
+      { agentType: 'another-workspace-agent', state: 'working', toolName: null },
+      { agentType: 'completed-parent', state: 'done', toolName: null }
+    ] }),
+    'session.shells': () => ({ ...session, subagents: [
+      { role: 'subagent', label: 'review', agentType: 'antigravity', state: 'working', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000000 },
+      { role: 'subagent', label: 'watch', agentType: 'codex', state: 'monitoring', toolName: null },
+      { role: 'subagent', label: 'finished', agentType: 'codex', state: 'done', toolName: null },
+      { role: 'subagent', label: 'idle-job', agentType: 'codex', state: 'idle', toolName: null },
+      { role: 'subagent', label: 'uncertain-job', agentType: 'codex', state: 'unverifiable', toolName: null }
+    ] })
+  } })
+  const view = await mount(panel, { host })
+  try {
+    assert.ok(view.find({ text: 'Session activity' }))
+    assert.ok(view.find({ text: 'zsh' }))
+    assert.ok(view.find({ text: 'review' }))
+    assert.ok(view.find({ text: 'watch' }))
+    assert.ok(view.find({ text: 'Monitoring' }))
+    assert.equal(view.find({ type: 'RelativeTime' })?.props.at, 1700000000000)
+    for (const text of ['another-workspace-agent', 'completed-parent', 'finished', 'idle-job', 'uncertain-job', 'Agent activity', 'Done', 'Idle']) {
+      assert.equal(view.find({ text }), null)
+    }
+    await view.toggle({ label: 'Settings & privacy' })
+    await view.toggle({ label: 'Show Antigravity subagent status' })
+    assert.equal(view.find({ text: 'review' }), null)
+    assert.ok(view.find({ text: 'watch' }))
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('selects a session when Orca cannot resolve focus and clears the old session when a selection changes', async () => {
+  let focused = false
+  const inputs: (string | null)[] = []
   const host = mockHost({ settings: { nativeActivity: true }, requests: {
     'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
+    'session.shells': ({ selected }) => {
+      inputs.push(selected)
+      if (!selected && !focused) return { status: 'select', options, selected: null, rows: [], subagents: [] }
+      if (selected === 'terminal:two') return { ...session, selected, rows: [{ kind: 'terminal', state: 'connected', name: 'fish' }] }
+      return session
+    }
+  } })
+  const view = await mount(panel, { host, locale: 'ko-KR' })
+  try {
+    assert.equal(view.find({ text: 'zsh' }), null)
+    assert.equal(view.find({ text: 'fish' }), null)
+    assert.ok(view.find({ label: '세션' }))
+    await view.select({ label: '세션' }, 'terminal:two')
+    assert.ok(view.find({ text: 'fish' }))
+    assert.ok(view.find({ text: '연결됨' }))
+    assert.equal(view.find({ text: 'zsh' }), null)
+    focused = true
+    await view.select({ label: '세션' }, 'follow-active')
+    assert.ok(view.find({ text: 'zsh' }))
+    assert.equal(view.find({ text: 'fish' }), null)
+    await view.select({ label: '세션' }, 'terminal:two')
+    focused = false
+    await view.emit('workspace.changed', { context: null })
+    assert.equal(view.find({ text: 'fish' }), null)
+    assert.equal(inputs.at(-1), null)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('distinguishes a verified empty session, disabled monitoring and an unavailable source', async () => {
+  let status: 'disabled' | 'ready' | 'unavailable' = 'disabled'
+  const host = mockHost({ settings: { nativeActivity: false }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
+    'session.shells': () => ({ status, selected: status === 'ready' ? 'chat:one' : null, options: status === 'ready' ? options.slice(0, 1) : [], rows: [], subagents: [] })
+  } })
+  const view = await mount(panel, { host })
+  try {
+    assert.ok(view.find({ text: 'Turn on chat activity in Settings & privacy to monitor this session.' }))
+    await view.toggle({ label: 'Settings & privacy' })
+    assert.equal(view.find({ label: 'Show Antigravity subagent status' })?.disabled, true)
+    status = 'ready'
+    await view.toggle({ label: 'Show chat activity' })
+    assert.ok(view.find({ text: 'No running shells or subagents reported.' }))
+    assert.equal(view.find({ text: 'Agent activity' }), null)
+    status = 'unavailable'
+    await view.emit('workspace.changed', { context: null })
+    assert.ok(view.find({ text: 'Session status is unavailable.' }))
+    assert.equal(view.find({ text: 'No running shells or subagents reported.' }), null)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('does not request native or session activity while the panel is hidden', async () => {
+  let requests = 0
+  let shellRequests = 0
+  const host = mockHost({ settings: { nativeActivity: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'session.shells': () => { shellRequests++; return { status: 'select', selected: null, options: [], rows: [], subagents: [] } },
     'native.get': () => { requests++; return { status: 'ready', activities: [], resources: [] } }
   } })
   const view = await mount(panel, { host, visible: false })
   try {
     assert.equal(requests, 0)
+    assert.equal(shellRequests, 0)
     await view.emit('workspace.changed', { context: null })
     assert.equal(requests, 0)
+    assert.equal(shellRequests, 0)
     await view.setVisible(true)
     await view.emit('workspace.changed', { context: null })
     assert.equal(requests, 1)
+    assert.ok(shellRequests > 0)
+    const visibleReads = shellRequests
     await view.setVisible(false)
     await view.emit('workspace.changed', { context: null })
     assert.equal(requests, 1)
+    assert.equal(shellRequests, visibleReads)
   } finally { await view.unmount() }
 })
 

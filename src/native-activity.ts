@@ -25,7 +25,7 @@ function label(value: unknown): string | null {
 }
 
 /** Resolve only exact Orca identifiers. Refuse duplicate or conflicting matches. */
-function workspaceRow(response: unknown, workspaceId: string): Record<string, unknown> | null {
+export function workspaceRow(response: unknown, workspaceId: string): Record<string, unknown> | null {
   if (!workspaceId) return null
   const result = object(object(response)?.result)
   if (!Array.isArray(result?.worktrees)) return null
@@ -196,7 +196,7 @@ export function parseNativeActiveResources(response: unknown, workspaceId: strin
 export const validSessionId = (value: string): boolean =>
   /^(?:[a-z][a-z0-9-]{0,31}_[a-f0-9]{8}_[a-f0-9]{4}_[a-f0-9]{4}_[a-f0-9]{4}_[a-f0-9]{12}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(value)
 
-function sessionId(agent: Record<string, unknown> | null): string | null {
+export function sessionId(agent: Record<string, unknown> | null): string | null {
   if (!agent || typeof agent.paneKey !== 'string' || agent.structuredHostOwned === false) return null
   const id = /^structured-agent-session-([^:]+):[^:]+$/.exec(agent.paneKey)?.[1]
   if (!id || !validSessionId(id)) return null

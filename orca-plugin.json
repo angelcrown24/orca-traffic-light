@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "traffic-light",
   "name": "Traffic Light",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Observe agent activity, sync shared capabilities, and connect agents on demand.",
   "license": "MIT-0",
   "engines": {
@@ -44,7 +44,7 @@
       {
         "key": "nativeActivity",
         "title": "Observe current native chat activity",
-        "description": "When enabled, reads Orca workspace status for all workspaces, including prompts and tool inputs, and on macOS reads recent tool inputs from current-workspace chat history. Displays detected names only.",
+        "description": "Reads Orca workspace status, which can include prompts, tool inputs and replies. On macOS it also reads the active tab and recent local tool calls. Session activity shows program names, terminal connections and active subagents.",
         "type": "boolean",
         "default": false
       },

@@ -1,6 +1,6 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { Call } from './protocol'
-import { readAntigravityChildren } from './antigravity-children'
+import { createSessionMonitor } from './session-monitor'
 import { createNativeReader, fetchSnapshot } from './native-reader'
 import { classifyResources, directJevCommand, type ResourceObservation } from './resource-classifier'
 import { createToolboxManager } from '../runtime/toolbox-manager.mjs'
@@ -65,9 +65,10 @@ export default function activate(orca: OrcaWorkerApi): void {
     terminals.set(event.terminalId, calls)
     const index = ++order
     const key = event.callId ? `id:${event.callId}` : `anonymous:${index}`
-    const id = JSON.stringify([event.terminalId, key])
+    const startedAt = Date.now()
+    const id = JSON.stringify([startedAt, index])
     calls.delete(key)
-    calls.set(key, { call: { id, tool: event.tool, agent: event.agent, state: 'running' }, order: index, callId: event.callId, lookup: directJevCommand(event.tool, event.input), resources: classifyResources(event.tool, event.input), startedAt: Date.now() })
+    calls.set(key, { call: { id, tool: event.tool, agent: event.agent, state: 'running' }, order: index, callId: event.callId, lookup: directJevCommand(event.tool, event.input), resources: classifyResources(event.tool, event.input), startedAt })
     while (calls.size > LIMIT) calls.delete(calls.keys().next().value!)
     orca.panels.post('calls.changed', {})
   })
@@ -96,27 +97,30 @@ export default function activate(orca: OrcaWorkerApi): void {
       // We saw an end but cannot identify its start. Keep it visible without claiming success.
       const index = ++order
       const key = `unpaired:${index}`
-      calls.set(key, { call: { id: JSON.stringify([event.terminalId, key]), tool: event.tool, agent: event.agent, state: 'uncertain' }, order: index, lookup: directJevCommand(event.tool, event.input), resources: classifyResources(event.tool, event.input), startedAt: Date.now() })
+      const startedAt = Date.now()
+      calls.set(key, { call: { id: JSON.stringify([startedAt, index]), tool: event.tool, agent: event.agent, state: 'uncertain' }, order: index, lookup: directJevCommand(event.tool, event.input), resources: classifyResources(event.tool, event.input), startedAt })
     }
     while (calls.size > LIMIT) calls.delete(calls.keys().next().value!)
     orca.panels.post('calls.changed', {})
   })
-  const nativeRead = createNativeReader(
-    async () => (await orca.settings.get('nativeActivity')) === true,
-    async () => (await orca.host.call('workspace.readContext'))?.workspaceId ?? null,
-    fetchSnapshot, undefined, {
-      enabled: async () => process.platform === 'darwin' && (await orca.settings.get('antigravityChildStatus')) === true,
-      read: readAntigravityChildren
-    }
-  )
-  orca.settings.onDidChange(({ key }) => { if (key === 'nativeActivity' || key === 'antigravityChildStatus') nativeRead.clear() })
+  const context = () => orca.host.call('workspace.readContext')
+  const enabled = async () => (await orca.settings.get('nativeActivity')) === true
+  let pendingSnapshot: Promise<unknown> | null = null
+  const snapshot = () => pendingSnapshot ??= fetchSnapshot().finally(() => { pendingSnapshot = null })
+  const nativeRead = createNativeReader(enabled, async () => (await context())?.workspaceId ?? null, snapshot)
+  const sessionRead = createSessionMonitor({ context, enabled, snapshot,
+    providerEnabled: async () => process.platform === 'darwin' && (await orca.settings.get('antigravityChildStatus')) === true })
+  orca.settings.onDidChange(({ key }) => {
+    if (key === 'nativeActivity' || key === 'antigravityChildStatus') { nativeRead.clear(); sessionRead.clear() }
+  })
   orca.panels.handle('native.get', nativeRead)
+  orca.panels.handle('session.shells', sessionRead)
   orca.panels.handle('calls.get', async () => {
     const context = await orca.host.call('workspace.readContext')
     const calls = context?.terminals.flatMap(({ id }) => [...(terminals.get(id)?.values() ?? [])]) ?? []
-    calls.sort((a, b) => b.order - a.order)
+    calls.sort((a, b) => b.startedAt - a.startedAt || b.order - a.order)
     const now = Date.now()
-    return { workspace: Boolean(context), calls: calls.map(({ call, lookup }) => lookup ? { ...call, tool: lookup } : call), resources: mergeResources(calls.flatMap(({ resources }) => resources)),
+    return { workspace: Boolean(context), calls: calls.slice(0, 30).map(({ call, lookup, startedAt }) => ({ ...call, tool: lookup ?? call.tool, startedAt })), resources: mergeResources(calls.flatMap(({ resources }) => resources)),
       activeResources: mergeResources(calls.filter(({ call, startedAt }) => call.state === 'running' && now >= startedAt && now - startedAt <= ACTIVE_MAX_AGE_MS).flatMap(({ resources }) => resources)) }
   })
 }

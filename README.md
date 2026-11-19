@@ -26,18 +26,19 @@ orca plugin update angelcrown24.traffic-light
 
 ## Watch an agent work
 
-Open **Activity** in the workspace you want to follow. Calls from local agent terminals appear as the plugin observes them. To include native chats, turn on **Settings & privacy → Show chat activity**. Expand **Recent tool calls** to see the provider, tool name, and reported state.
+Open **Activity** and turn on **Settings & privacy → Show chat activity**. In **Session activity**, select the chat or terminal you want to watch. On supported macOS versions of Orca, **Follow selection** follows the active chat or terminal pane as you switch tabs. If Orca cannot identify a single active session, choose one from the menu.
 
 | In the panel | What it tells you |
 | --- | --- |
 | **Detected items** | Skill, plugin, and MCP server names observed in calls or skill paths. |
 | **In use** | The item was observed in an ongoing agent turn or running request. |
 | **Jev** | The shared runner linked this skill read or MCP call to a Jev recommendation in the same conversation. |
-| **Agent activity** | The agent’s reported state, plus subagents when Orca supplies them. |
+| **Session activity** | Running shell calls, background commands and active subagents in the selected session. A selected live terminal shows **Connected**. |
+| **Recent tool calls** | The latest 30 calls observed across local terminals, native chats and the shared runner in this workspace, newest first. **Clear list** hides earlier entries and keeps running jobs and source history intact. |
 
-For a Gemini chat running through Antigravity, a parent turn can finish while a delegated task continues. On macOS, enable **Show chat activity** and **Show Antigravity subagent status** under **Settings & privacy** to see each child’s reported state and time. When only a delegation call is visible, the panel shows **Subagent call** with its timestamp and **Live status unavailable**. Open Activity in the workspace that contains the conversation. Two Orca workspaces can use the same project folder. [Example showing a completed parent and an idle child](docs/images/antigravity-status-en.png)
+For a Gemini chat running through Antigravity, enable **Show Antigravity subagent status** on macOS. A child that continues working after its parent replies stays visible while its provider reports it as active. Short calls can finish between samples, and a detached process needs a session link from Orca or the provider to appear. [Example with an active Antigravity subagent](docs/images/antigravity-status-en.png)
 
-<a href="docs/images/activity-en.png"><img src="docs/images/activity-en.png" width="390" alt="English Activity tab showing detected skills, inline Jev and In use badges, and agent activity"></a>
+<a href="docs/images/activity-en.png"><img src="docs/images/activity-en.png" width="390" alt="English Activity tab with a running shell in the selected session, detected skills and inline Jev badges"></a>
 
 ## Share a skill or MCP tool
 

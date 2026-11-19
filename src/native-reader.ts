@@ -29,7 +29,7 @@ export function fetchSnapshot(): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const command = resolveOrcaCli(process.platform, process.env.ORCA_CLI_COMMAND)
     if (!command) return reject(new Error('snapshot unavailable'))
-    execFile(command, ['worktree', 'ps', '--json'], { timeout: 5000, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' }, (error, stdout) => {
+    execFile(command, ['worktree', 'ps', '--environment', 'local', '--json'], { timeout: 5000, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' }, (error, stdout) => {
       if (error) return reject(new Error('snapshot unavailable'))
       try {
         const result: unknown = JSON.parse(stdout)
@@ -87,13 +87,9 @@ export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace,
           : journals.some((x) => x.status === 'unavailable') ? 'unavailable'
           : truncated || journals.some((x) => x.status === 'truncated') ? 'truncated' : 'ready'
         const newestFirst = (a: NativeToolCall, b: NativeToolCall) => b.observedAt - a.observedAt
-        const callsBySession = journals.map((j, i) => (j.recentTools ?? []).map(call => ({
+        const recentTools = journals.flatMap((j, i) => (j.recentTools ?? []).map(call => ({
           ...call, agentType: sessions[i].agentType, state: call.state === 'running' && !sessions[i].working ? 'unknown' as const : call.state
-        })).sort(newestFirst))
-        // Keep a quieter chat represented even if another fills the entire window.
-        const latestPerSession = callsBySession.flatMap(calls => calls.slice(0, 1))
-        const remaining = callsBySession.flatMap(calls => calls.slice(1)).sort(newestFirst)
-        const recentTools = latestPerSession.concat(remaining.slice(0, 30 - latestPerSession.length)).sort(newestFirst)
+        }))).sort(newestFirst).slice(0, 30)
         const active = new Map<string, ResourceObservation>()
         const invocations = new Map<string, number>()
         const currentResources = parseNativeActiveResources(snapshot, id)

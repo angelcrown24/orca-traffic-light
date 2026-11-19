@@ -82,10 +82,10 @@ test('retains the root Antigravity dispatch time outside the visible calls, inde
     { name: 'manage_subagents', input: '{"Action":"list"}' }, { state: 'failed' }, { state: 'running' },
     { is_root: 0 }, { mcp_server: 'custom', mcp_tool: 'invoke_subagent' }, { name: 'unrelated_tool' }
   ].map(changes => ({ ...base, at_ms: base.at_ms + 5000, ...changes }))
-  const recent = Array.from({ length: 30 }, (_, i) => ({ ...base, seq: i + 2, name: 'read_file' }))
+  const recent = Array.from({ length: 30 }, (_, i) => ({ ...base, seq: i + 2, name: 'read_file', at_ms: base.at_ms + 6000 + i }))
   const read = (rows: unknown[]) => readJournalActivity(id, async () => [meta, ...rows])
   assert.equal((await read(other)).lastSubagentInvocationAt, undefined)
-  const result = await read([...recent, ...other, base, { ...base, at_ms: base.at_ms - 1000 }])
+  const result = await read([...other, ...recent, base, { ...base, at_ms: base.at_ms - 1000 }])
   assert.equal(result.lastSubagentInvocationAt, base.at_ms)
   assert.ok(result.recentTools?.every(tool => tool.name === 'read_file'))
 })

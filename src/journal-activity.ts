@@ -91,7 +91,7 @@ export async function readJournalActivity(sessionId: string, query: Query = quer
           identity.server == null && identity.tool == null && Number.isSafeInteger(item.at_ms) && item.at_ms > lastSubagentInvocationAt) {
         lastSubagentInvocationAt = item.at_ms
       }
-      if (recentTools.length < 30 && name && Number.isSafeInteger(item.seq) && Number.isSafeInteger(item.idx) && Number.isSafeInteger(item.at_ms) && item.at_ms > 0) {
+      if (name && Number.isSafeInteger(item.seq) && Number.isSafeInteger(item.idx) && Number.isSafeInteger(item.at_ms) && item.at_ms > 0) {
         const state = item.state === 'completed' || item.state === 'failed' ? item.state : item.state === 'running' && active ? 'running' : 'unknown'
         recentTools.push({ id: sessionId + ':' + item.seq + ':' + item.idx, name, observedAt: item.at_ms, state })
       }
@@ -102,6 +102,7 @@ export async function readJournalActivity(sessionId: string, query: Query = quer
       }
     }
     return { status: calls.length > MAX_CALLS ? 'truncated' : 'ready', resources, activeResources,
-      ...(lastSubagentInvocationAt ? { lastSubagentInvocationAt } : {}), ...(recentTools.length ? { recentTools } : {}) }
+      ...(lastSubagentInvocationAt ? { lastSubagentInvocationAt } : {}),
+      ...(recentTools.length ? { recentTools: recentTools.sort((a, b) => b.observedAt - a.observedAt).slice(0, 30) } : {}) }
   } catch { return { status: 'unavailable', resources: [] } }
 }

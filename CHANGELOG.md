@@ -1,5 +1,12 @@
 # Release history
 
+## [v0.10.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.10.0) · Watch the selected session
+
+- **Session activity** brings running shell calls, background commands and active subagents together. On macOS it follows the selected local chat or split terminal when Orca reports its identity. You can also choose a session manually.
+- A live terminal shows **Connected**. Completed agents and idle children leave the session view.
+- **Recent tool calls** shows the latest 30 calls across the workspace. **Clear list** hides earlier entries across panel reloads while jobs continue running.
+- The English and Korean panels and the illustrated README cover the new session view.
+
 ## [v0.9.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.9.0) · Follow delegated work in Antigravity chats
 
 - A new opt-in setting on macOS reads child status and its report time from the local Antigravity CLI index. This covers native Gemini chats running through Antigravity, including delegated work that continues after the parent replies.
