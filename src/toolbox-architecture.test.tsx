@@ -40,3 +40,16 @@ test('architecture draws real provider, catalog, allowlist and runtime nodes wit
     assert.deepEqual(view.warnings, [])
   } finally { await view.unmount() }
 })
+
+
+test('shared and discovered counts use the same grouped entries as the library, including registered updates', () => {
+  const catalog: CatalogItem[] = [
+    { ...items[0], id: 'alpha', name: 'Alpha', sharing: undefined, providers: ['Shared'] },
+    { ...items[0], id: 'second', name: 'alpha', providers: ['Codex'], sharing: { state: 'provider', canSync: true } },
+    { ...items[2], sharing: { state: 'update', canSync: true } },
+    { ...items[2], id: 'variant', providers: ['Codex'], sharing: { state: 'conflict', canSync: false } }
+  ]
+  const result = topology(catalog, state)
+  assert.deepEqual(result.shared, { skills: 1, mcp: 1 })
+  assert.deepEqual(result.catalog, result.shared)
+})

@@ -34,6 +34,8 @@ Check the skill’s declared requirements against the software and tools availab
 
 The shared registry records the source location and approved fingerprint. The runner resolves credentials from the original configuration or environment when the server is requested. If the source changes, synchronize it and apply the selection to new connections.
 
+Shared MCP connections answer server health checks. When the server reports a change to its tool list over stdio or an open HTTP response stream, the runner refreshes the selected server’s catalog on the next call. Concurrent calls on that connection share the pending lookup and dispatch their tool actions individually.
+
 The runner supports stdio and Streamable HTTP with MCP protocol versions `2024-11-05`, `2025-03-26`, and `2025-06-18`. Legacy SSE, servers that require a newer protocol, provider-managed OAuth, proprietary built-ins, and unsupported per-tool policies require a compatible native connector or adapter. Disabled entries stay unavailable. Stdio commands receive basic operating-system variables and environment entries explicitly supplied or inherited by their configuration.
 
 ## Agent connection

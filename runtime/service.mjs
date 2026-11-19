@@ -1,6 +1,5 @@
 import { createServer } from 'node:http'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
 import { McpClient, ToolboxError } from './mcp-client.mjs'
 
 const MAX_BODY = 64 * 1024
@@ -83,6 +82,19 @@ export async function createToolboxService(options) {
     }
     throw error('TOOL_LIMIT', 'The server tool list exceeded the page limit.')
   }
+  async function catalogFor(client, entry, refresh) {
+    const revision = client.toolsRevision
+    if (entry.discovery?.revision === revision) return entry.discovery.pending
+    if (!refresh && entry.tools?.revision === revision) return entry.tools.result
+    const pending = tools(client).then(result => {
+      if (client.toolsRevision !== revision) throw error('CATALOG_CHANGED', 'The server changed its tools during discovery. Request the tool list again.')
+      entry.tools = { revision, result }
+      return result
+    })
+    entry.discovery = { revision, pending }
+    try { return await pending }
+    finally { if (entry.discovery?.pending === pending) delete entry.discovery }
+  }
   async function operation(bundle, request) {
     if (!object(request) || typeof request.op !== 'string') throw error('INVALID_REQUEST', 'A valid operation is required.')
     if (request.op === 'list') return {
@@ -102,12 +114,10 @@ export async function createToolboxService(options) {
     try {
       let result
       if (request.op === 'skill') {
-        const resolved = await options.resolveRecord(record)
-        const info = await stat(resolved.path)
-        if (!info.isFile() || info.size > 128 * 1024) throw error('SKILL_TOO_LARGE', 'The skill file is unavailable or too large.')
-        const content = await readFile(resolved.path, 'utf8')
-        if (Buffer.byteLength(content) > 128 * 1024) throw error('SKILL_TOO_LARGE', 'The skill file exceeded the size limit.')
-        result = { id: record.id, name: record.name, path: resolved.path, content }
+        // Deliver the bytes checked by the resolver, even if the file changes after verification.
+        const { path, content } = await options.resolveRecord(record)
+        if (typeof content !== 'string' || Buffer.byteLength(content) > 128 * 1024) throw error('SKILL_TOO_LARGE', 'The skill file is unavailable or too large.')
+        result = { id: record.id, name: record.name, path, content }
       } else {
         if (request.op === 'reconnect') {
           const previous = bundle.clients.get(record.id)
@@ -117,11 +127,10 @@ export async function createToolboxService(options) {
         const client = await connection(bundle, record)
         entry = bundle.clients.get(record.id); entry.busy++; entry.lastUsed = Date.now()
         if (request.op === 'reconnect') result = { reconnected: true, note: 'A new server connection was created. Previous server session state may have reset.' }
-        else if (request.op === 'tools') { result = await tools(client); entry.tools = result }
+        else if (request.op === 'tools') result = await catalogFor(client, entry, true)
         else {
           // Check the live selected server's catalog, rather than silently invoking an arbitrary name.
-          const catalog = entry.tools ?? await tools(client)
-          entry.tools = catalog
+          const catalog = await catalogFor(client, entry, false)
           const tool = catalog.tools.find(x => x.name === request.tool)
           if (!tool) throw error('UNKNOWN_TOOL', 'The requested tool is not exposed by this selected server.')
           dispatched = true

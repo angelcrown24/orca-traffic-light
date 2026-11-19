@@ -144,3 +144,45 @@ test('returns only 30 terminal history rows while tracking older live tools and 
     assert.deepEqual(after.calls[0], { ...before.calls[0], state: 'finished' })
   } finally { Date.now = dateNow; await worker.deactivate() }
 })
+
+test('providers can reuse a call ID in one terminal and repeated hooks preserve call history', async () => {
+  const context = { branch: '', displayName: '', terminals: [{ id: 't1' }] }
+  const worker = await mountWorker(main, { host: mockHost({ results: { 'workspace.readContext': context } }) })
+  const codex = { agent: 'codex', tool: 'Read', callId: '1', workspaceId: null, terminalId: 't1', input: null }
+  const claude = { ...codex, agent: 'claude' }
+  try {
+    await worker.hooks.fire('agent.tool.before', codex)
+    const initial = (await worker.request('calls.get')).calls[0]
+    await worker.hooks.fire('agent.tool.before', claude)
+    await worker.hooks.fire('agent.tool.before', codex)
+    await worker.hooks.fire('agent.tool.after', claude)
+    let calls = (await worker.request('calls.get')).calls
+    assert.deepEqual(calls.find(row => row.agent === 'codex'), initial)
+    assert.deepEqual(calls.map(row => row.state), ['finished', 'running'])
+    await worker.hooks.fire('agent.tool.after', codex)
+    await worker.hooks.fire('agent.tool.before', codex)
+    await worker.hooks.fire('agent.tool.after', codex)
+    await worker.hooks.fire('agent.tool.after', codex)
+    calls = (await worker.request('calls.get')).calls
+    assert.equal(calls.length, 3)
+    assert.equal(new Set(calls.map(row => row.id)).size, 3)
+    assert.ok(calls.every(row => row.state === 'finished'))
+  } finally { await worker.deactivate() }
+})
+
+test('keeps newest detected names across terminals when the workspace resource limit is reached', async () => {
+  const context = { branch: '', displayName: '', terminals: [{ id: 't1' }, { id: 't2' }] }
+  const worker = await mountWorker(main, { host: mockHost({ results: { 'workspace.readContext': context } }) })
+  try {
+    for (let i = 0; i < 101; i++) {
+      await worker.hooks.fire('agent.tool.before', { agent: 'codex', workspaceId: null, terminalId: i < 100 ? 't1' : 't2',
+        callId: String(i), tool: 'mcp__item' + i + '__run', input: null })
+    }
+    const current = await worker.request('calls.get')
+    for (const list of [current.resources, current.activeResources]) {
+      assert.equal(list?.length, 100)
+      assert.equal(list?.[0].name, 'item100')
+      assert.ok(!list?.some(row => row.name === 'item0'))
+    }
+  } finally { await worker.deactivate() }
+})

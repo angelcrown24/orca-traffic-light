@@ -58,18 +58,20 @@ export function RecentCalls(props: Sources & { workspace: boolean; loading: bool
     <Stack gap="sm">
       {list.length ? <Row justify="end"><Button variant="ghost" size="sm" tooltip={t.clearHint} onPress={() => markCleared(all)}>{t.clear}</Button></Row> :
         <Text muted size="sm">{props.loading ? t.loading : props.workspace ? t.empty : t.workspace}</Text>}
-      {list.map(row => <Row key={row.key} justify="between" align="center" gap="sm" wrap>
-        <Box direction="column" gap="xs" minWidth={0} grow>
-          <Text size="sm" truncate>{row.name}</Text>
-          <Row gap="xs" align="center" wrap>
-            {row.agent ? <Text size="xs" muted>{row.agent}</Text> : null}
-            <Text size="xs" muted>{(row.agent ? '· ' : '') + t[row.source]}</Text>
-            {row.at > 0 ? <RelativeTime at={row.at} muted /> : null}
+      {list.map(row => <Stack key={row.key} gap="xs">
+        <Row justify="between" align="center" gap="sm" wrap>
+          <Box minWidth={0} grow><Text size="sm" weight="medium" truncate>{row.name}</Text></Box>
+          <Row gap="xs" align="center">
+            {row.jev ? <Badge tone="neutral">Jev</Badge> : null}
+            <Badge tone={row.state === 'running' ? 'accent' : row.state === 'failed' ? 'danger' : row.state === 'awaiting' ? 'warning' : 'neutral'}>{t[row.state]}</Badge>
           </Row>
-        </Box>
-        {row.jev ? <Badge tone="neutral">Jev</Badge> : null}
-        <Badge tone={row.state === 'running' ? 'accent' : row.state === 'failed' ? 'danger' : row.state === 'awaiting' ? 'warning' : 'neutral'}>{t[row.state]}</Badge>
-      </Row>)}
+        </Row>
+        <Row gap="xs" align="center" wrap>
+          {row.agent ? <Text size="xs" muted>{row.agent}</Text> : null}
+          <Text size="xs" muted>{(row.agent ? '· ' : '') + t[row.source]}</Text>
+          {row.at > 0 ? <RelativeTime at={row.at} muted /> : null}
+        </Row>
+      </Stack>)}
     </Stack>
   </Collapsible>
 }

@@ -115,7 +115,12 @@ test('skills are resolved and read only on explicit selected skill requests', as
   const dir = await mkdtemp(join(tmpdir(), 'toolbox-skills-')); t.after(() => rm(dir, { recursive: true, force: true }))
   const path = join(dir, 'SKILL.md'); await writeFile(path, '# A private skill\nUse only when requested.')
   let reads = 0
-  const service = await createToolboxService({ resolveRecord: async () => { reads++; return { path } } }); t.after(() => service.close())
+  const service = await createToolboxService({ resolveRecord: async () => {
+    reads++
+    const content = await readFile(path, 'utf8')
+    await writeFile(path, '# A later revision')
+    return { path, content }
+  } }); t.after(() => service.close())
   const bundle = await service.prepare({ workspaceId: 'one', records: [{ id: 'skill-one', kind: 'skill', name: 'Skill' }] })
   await request(bundle, { op: 'list' }); assert.equal(reads, 0)
   assert.equal((await request(bundle, { op: 'skill', id: 'other' })).error.code, 'NOT_SELECTED'); assert.equal(reads, 0)
@@ -162,7 +167,7 @@ test('Streamable HTTP JSON and SSE responses preserve session headers without re
 test('CLI end-to-end returns selected inventory, reads skills, lists tools, and calls with stdin JSON', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'toolbox-cli-')); t.after(() => rm(dir, { recursive: true, force: true }))
   const skillPath = join(dir, 'SKILL.md'); await writeFile(skillPath, '# Fixture skill')
-  const { service } = await rig(t, { resolveRecord: async r => r.kind === 'skill' ? { path: skillPath } : resolve(r) })
+  const { service } = await rig(t, { resolveRecord: async r => r.kind === 'skill' ? { path: skillPath, content: await readFile(skillPath, 'utf8') } : resolve(r) })
   const bundle = await service.prepare({ workspaceId: 'cli', records: [record, {id:'skill-cli',kind:'skill',name:'Fixture skill'}] })
   const path = join(dir, 'bundle.json'); await writeFile(path, JSON.stringify({ version: 1, ...bundle }), { mode: 0o600 })
   const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url))
@@ -202,4 +207,86 @@ test('a real stdio server receives declared and baseline environment but not oth
   const bundle = await service.prepare({ workspaceId: 'local', records: [selected] })
   const result = await request(bundle, { op: 'call', id: selected.id, tool: 'counter', arguments: {} })
   assert.deepEqual(JSON.parse(result.result.content[0].text), { path: true, inherited: 'allow', explicit: 'explicit', unrelated: false })
+})
+
+test('stdio accepts a server ping and updates changed tools on demand in the same connection', async t => {
+  const dynamic = `
+    let changed = false, lists = 0, calls = 0, ready;
+    const send = msg => process.stdout.write(JSON.stringify({jsonrpc:'2.0', ...msg}) + '\\n');
+    require('node:readline').createInterface({input:process.stdin}).on('line', line => {
+      const msg = JSON.parse(line);
+      if (msg.method === 'initialize') {
+        ready = msg.id;
+        send({method:'ping', id:ready});
+      } else if (!msg.method && msg.id === ready) {
+        if (JSON.stringify(msg.result) === '{}') send({id:ready, result:{protocolVersion:'2025-03-26', capabilities:{tools:{listChanged:true}}}});
+        else send({id:ready, error:{code:-32000,message:'ping failed'}});
+      } else if (msg.method === 'tools/list') {
+        lists++;
+        send({id:msg.id,result:{tools:[{name:changed ? 'updated' : 'rotate', inputSchema:{type:'object'}}]}});
+      } else if (msg.method === 'tools/call') {
+        calls++;
+        if (msg.params.name === 'rotate') {
+          changed = true;
+          send({method:'notifications/tools/list_changed'});
+        }
+        send({id:msg.id, result:{content:[{type:'text',text:JSON.stringify({lists,calls})}]}});
+      }
+    });`;
+  const { bundle } = await rig(t, { resolveRecord: async () => ({ command: process.execPath, args: ['-e', dynamic] }) });
+  const first = await call(bundle, 'rotate');
+  assert.equal(first.ok, true);
+  assert.equal((await call(bundle, 'rotate')).error.code, 'UNKNOWN_TOOL');
+  const fresh = await call(bundle, 'updated');
+  assert.deepEqual(JSON.parse(fresh.result.content[0].text), { lists: 2, calls: 2 });
+});
+
+test('HTTP stream handles a server ping sharing the client request ID without consuming its response', async t => {
+  let stream, pingId, attempts = 0;
+  const remote = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const msg = JSON.parse(Buffer.concat(chunks));
+    const send = result => { res.writeHead(200, { 'Content-Type':'application/json' }); res.end(JSON.stringify({jsonrpc:'2.0', id:msg.id, result})) };
+    if (msg.method === 'initialize') return send({protocolVersion:'2025-06-18',capabilities:{tools:{}}});
+    if (msg.method === 'tools/list') return send({tools:[{name:'clock',inputSchema:{type:'object'}}]});
+    if (msg.method === 'tools/call') {
+      stream = res; pingId = msg.id; attempts++;
+      res.writeHead(200, {'Content-Type':'text/event-stream'});
+      res.write('data: ' + JSON.stringify({jsonrpc:'2.0',id:pingId,method:'ping'}) + '\n\n');
+      return;
+    }
+    res.writeHead(202); res.end();
+    if (msg.id === pingId && msg.result && !Object.keys(msg.result).length && stream) {
+      stream.end('data: ' + JSON.stringify({jsonrpc:'2.0',id:pingId,result:{content:[{type:'text', text:'tick'}]}}) + '\n\n');
+    }
+  });
+  await new Promise(resolve => remote.listen(0, '127.0.0.1', resolve));
+  t.after(() => { remote.closeAllConnections(); return new Promise(resolve => remote.close(resolve)) });
+  const { bundle } = await rig(t, { resolveRecord: async () => ({ url:'http://127.0.0.1:' + remote.address().port }) });
+  const result = await call(bundle, 'clock');
+  assert.equal(result.ok, true);
+  assert.equal(result.result.content[0].text, 'tick');
+  assert.equal(attempts, 1);
+});
+
+test('simultaneous tool calls share one catalog read without merging the tool actions', async t => {
+  const server = `
+    const rl = require('node:readline').createInterface({input:process.stdin});
+    let catalogs = 0, calls = 0;
+    rl.on('line', line => {
+      const msg = JSON.parse(line);
+      const reply = result => process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:msg.id,result}) + '\\n');
+      if (msg.method === 'initialize') reply({protocolVersion:'2025-03-26',capabilities:{tools:{}}});
+      if (msg.method === 'tools/list') {
+        catalogs++;
+        setTimeout(() => reply({tools:[{name:'counter',inputSchema:{type:'object'}}]}), 60);
+      }
+      if (msg.method === 'tools/call') reply({content:[{type:'text',text:JSON.stringify([catalogs, ++calls])}]});
+    });`
+  const { bundle } = await rig(t, { resolveRecord: async () => ({ command: process.execPath, args: ['-e', server] }) })
+  const replies = await Promise.all(Array.from({ length: 6 }, () => call(bundle)))
+  const counts = replies.map(reply => JSON.parse(reply.result.content[0].text))
+  assert.deepEqual(counts.map(([catalogs]) => catalogs), Array(6).fill(1))
+  assert.deepEqual(counts.map(([, calls]) => calls).sort(), [1, 2, 3, 4, 5, 6])
 })

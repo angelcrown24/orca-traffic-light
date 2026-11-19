@@ -135,16 +135,19 @@ test('distinguishes a verified empty session, disabled monitoring and an unavail
   } finally { await view.unmount() }
 })
 
-test('does not request native or session activity while the panel is hidden', async () => {
+test('does not read activity sources or refresh terminal calls on hook events while hidden', async () => {
   let requests = 0
   let shellRequests = 0
+  let terminalReads = 0
   const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
+    'calls.get': () => { terminalReads++; return { workspace: true, calls: [] } },
     'session.shells': () => { shellRequests++; return { status: 'select', selected: null, options: [], rows: [], subagents: [] } },
     'native.get': () => { requests++; return { status: 'ready', activities: [], resources: [] } }
   } })
   const view = await mount(panel, { host, visible: false })
   try {
+    await view.post('calls.changed', {})
+    assert.equal(terminalReads, 0)
     assert.equal(requests, 0)
     assert.equal(shellRequests, 0)
     await view.emit('workspace.changed', { context: null })
@@ -163,7 +166,7 @@ test('does not request native or session activity while the panel is hidden', as
 })
 
 
-test('shows detected resource names and explains the detection source', async () => {
+test('shows detected resource names and explains the detection source in privacy details', async () => {
   const host = mockHost({ requests: { 'calls.get': () => ({ workspace: true, calls: [], resources: [
     { category: 'skill', name: 'ui-ux-pro-max', evidence: 'inferred' },
     { category: 'mcp', name: 'figma-local', evidence: 'observed' }
@@ -172,6 +175,8 @@ test('shows detected resource names and explains the detection source', async ()
   try {
     assert.equal(Boolean(view.find({ text: 'ui-ux-pro-max' })), true)
     assert.equal(Boolean(view.find({ text: 'figma-local' })), true)
+    await view.toggle({ label: 'Settings & privacy' })
+    await view.toggle({ label: 'How activity is read' })
     assert.equal(Boolean(view.find({ text: 'Observed in tool calls, skill file paths and the shared runner. In use marks a running request or an ongoing agent turn.' })), true)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
@@ -239,8 +244,9 @@ test('shows Korean labels and privacy disclosure beside the switch', async () =>
   try {
     assert.equal(Boolean(view.find({ text: '감지된 항목' })), true)
     assert.equal(Boolean(view.find({ text: '스킬' })), true)
-    assert.equal(Boolean(view.find({ text: '도구 호출, 스킬 파일 경로, 공용 실행기에서 감지한 항목입니다. 현재 사용 중은 요청이나 에이전트 작업이 진행 중일 때 표시됩니다.' })), true)
     await view.toggle({ label: '설정 및 개인정보' })
+    await view.toggle({ label: '어떤 정보를 읽나요?' })
+    assert.equal(Boolean(view.find({ text: '도구 호출, 스킬 파일 경로, 공용 실행기에서 감지한 항목입니다. 현재 사용 중은 요청이나 에이전트 작업이 진행 중일 때 표시됩니다.' })), true)
     assert.equal(Boolean(view.find({ label: '채팅 활동 표시' })), true)
     assert.equal(Boolean(view.find({ text: '켜면 모든 작업공간의 상태에 포함된 프롬프트·도구 입력·응답을 읽습니다. macOS에서는 현재 작업공간의 최근 도구 입력도 읽습니다.' })), true)
     assert.deepEqual(view.errors, [])
@@ -273,7 +279,8 @@ test('marks only Jev-linked uses in existing resource and call rows, and clears 
     assert.ok(skillRow?.text.includes('Jev'))
     assert.ok(skillRow?.text.includes('현재 사용 중'))
     assert.ok(view.find({ type: 'Row', text: /^graphics/ })?.text.includes('Jev'))
-    assert.equal(view.find({ type: 'Row', text: 'review' })?.text, 'review')
+    assert.ok(view.find({ text: 'review' }))
+    assert.equal(view.find({ type: 'Row', text: /^review/ })?.text.includes('Jev'), false)
     const badges = view.findAll({ type: 'Badge', text: 'Jev' })
     assert.equal(badges.length, 2)
     assert.ok(badges.every(badge => badge.props.tone === 'neutral'))
@@ -322,6 +329,54 @@ test('hidden activity refreshes its workspace history on return and shows provid
     await view.toggle({ label: 'Settings & privacy' })
     await view.toggle({ label: 'Show chat activity' })
     assert.equal(view.find({ text: 'view_file' }), null)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('live items precede earlier items across types and long lists can be paged', async () => {
+  const skills = Array.from({ length: 10 }, (_, index) => ({ category: 'skill' as const, name: 'skill-' + index, evidence: 'observed' as const }))
+  const active = { category: 'plugin' as const, name: 'z-last', evidence: 'observed' as const }
+  const host = mockHost({ requests: { 'calls.get': () => ({ workspace: true, calls: [], resources: skills, activeResources: [active] }) } })
+  const view = await mount(panel, { host })
+  try {
+    assert.ok(view.find({ text: 'z-last' }))
+    assert.ok(view.find({ text: '1 / 2' }))
+    assert.equal(view.find({ text: 'skill-9' }), null)
+    await view.press({ text: 'Next items' })
+    assert.ok(view.find({ text: 'skill-9' }))
+    assert.equal(view.find({ text: 'z-last' }), null)
+    await view.press({ text: 'Previous items' })
+    assert.ok(view.find({ text: 'In use' }))
+    assert.equal(view.find({ text: 'MCP server' }), null)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('an unavailable pinned session stays selected until the user explicitly follows another', async () => {
+  let attached = true
+  const inputs: (string | null)[] = []
+  const ctx = { workspaceId: 'workspace-1', branch: 'main', displayName: 'Workspace', terminals: [] }
+  const host = mockHost({ settings: { nativeActivity: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
+    'session.shells': ({ selected }) => {
+      inputs.push(selected)
+      if (!selected) return { ...session, selected: 'terminal:two', rows: [{ kind: 'terminal', name: 'fish', state: 'connected' }] }
+      return attached ? { ...session, selected } : { status: 'select', selected: null, rows: [], subagents: [], options: options.slice(1) }
+    }
+  } })
+  const view = await mount(panel, { host })
+  try {
+    await view.emit('workspace.changed', { context: ctx })
+    await view.select({ label: 'Session' }, 'chat:one')
+    attached = false
+    await view.emit('workspace.changed', { context: ctx })
+    await view.emit('workspace.changed', { context: ctx })
+    assert.equal(inputs.at(-1), 'chat:one')
+    assert.equal(view.find({ text: 'fish' }), null)
+    assert.ok(view.find({ text: 'The selected session is no longer available. Choose a session to continue.' }))
+    await view.select({ label: 'Session' }, 'follow-active')
+    assert.ok(view.find({ text: 'fish' }))
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })

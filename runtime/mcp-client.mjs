@@ -30,6 +30,7 @@ export class McpClient {
     this.requestTimeout = Math.max(1, Math.min(options.requestTimeoutMs ?? config.requestTimeoutMs ?? 60_000, config.requestTimeoutMs ?? 60_000, 60_000))
     this.pending = new Map()
     this.sequence = 0
+    this.toolsRevision = 0
     this.closed = false
     this.controllers = new Set()
     this.protocol = '2025-03-26'
@@ -77,11 +78,20 @@ export class McpClient {
     this.process.once('error', () => this.breakConnection(fail('SERVER_START_FAILED', 'The selected server could not start. Check its installation.')))
     this.process.once('exit', () => this.breakConnection(fail('SERVER_CLOSED', 'The selected server exited. Reconnect explicitly before using it again.')))
   }
+  serverMessage(message) {
+    if (message.id === undefined) {
+      if (message.method === 'notifications/tools/list_changed') this.toolsRevision++
+      return null
+    }
+    const response = message.method === 'ping' ? { result: {} }
+      : { error: { code: -32601, message: 'Client capability not supported' } }
+    return { jsonrpc: '2.0', id: message.id, ...response }
+  }
   receive(message) {
     if (!message || message.jsonrpc !== '2.0') { this.breakConnection(fail('INVALID_PROTOCOL', 'The server returned an invalid MCP message.')); return }
-    if (message.method && message.id !== undefined) {
-      // Sampling and other client-side capabilities are intentionally not advertised.
-      this.process?.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'Client capability not supported' } }) + '\n')
+    if (typeof message.method === 'string') {
+      const response = this.serverMessage(message)
+      if (response) this.process.stdin.write(JSON.stringify(response) + '\n')
       return
     }
     const pending = this.pending.get(message.id)
@@ -124,7 +134,8 @@ export class McpClient {
       if (!response.ok) throw fail(response.status === 401 || response.status === 403 ? 'AUTH_REQUIRED' : 'SERVER_HTTP_ERROR', 'The MCP endpoint rejected the request. Check its connection and authentication.')
       const session = response.headers.get('mcp-session-id')
       if (session) this.session = session
-      if (message.id === undefined) { await response.body?.cancel(); return undefined }
+      // Notifications and replies to a server-initiated request receive an HTTP acknowledgement.
+      if (message.id === undefined || message.method === undefined) { await response.body?.cancel(); return undefined }
       if (!response.body) throw fail('INVALID_PROTOCOL', 'The server returned an empty response.')
       const sse = (response.headers.get('content-type') ?? '').includes('text/event-stream')
       reader = response.body.getReader()
@@ -140,7 +151,11 @@ export class McpClient {
             if (!data) continue
             let parsed
             try { parsed = JSON.parse(data) } catch { throw fail('INVALID_PROTOCOL', 'The server returned invalid event data.') }
-            if (parsed.id === message.id) return this.result(parsed)
+            if (parsed?.jsonrpc !== '2.0') throw fail('INVALID_PROTOCOL', 'The server returned an invalid MCP message.')
+            if (typeof parsed.method === 'string') {
+              const reply = this.serverMessage(parsed)
+              if (reply) await this.http(reply, Math.min(timeout, 5000))
+            } else if (parsed.id === message.id) return this.result(parsed)
           }
         }
         if (done) break

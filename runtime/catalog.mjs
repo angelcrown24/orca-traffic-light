@@ -286,7 +286,7 @@ export async function resolveRecord(record) {
       const portability = await skillPortability(content, path)
       if (!portability.available) throw fail('CAPABILITY_UNAVAILABLE', portability.reason)
       if (record.packageRoot && (await inspectSkillPackage(record.packageRoot, true)).fingerprint !== record.packageFingerprint) throw fail('CAPABILITY_CHANGED', 'This skill package changed. Prepare the selection again.')
-      return { path }
+      return { path, content }
     } catch (error) { if (['CAPABILITY_CHANGED', 'CAPABILITY_UNAVAILABLE'].includes(error.code)) throw error; throw fail('CAPABILITY_UNAVAILABLE', 'This skill is no longer readable.') }
   }
   return normalize(await readMcpSource(record), record.format, record.serverKey, true)

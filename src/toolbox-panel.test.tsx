@@ -41,7 +41,7 @@ test('discovers metadata only when a catalog view is opened', async () => {
     assert.equal(scans, 0)
     await view.select({ label: 'Traffic Light views' }, 'structure')
     assert.equal(scans, 1)
-    assert.equal(Boolean(view.find({ text: 'One library. Only what you need.' })), true)
+    assert.equal(Boolean(view.find({ text: 'Capability flow' })), true)
     await view.select({ label: 'Traffic Light views' }, 'library')
     assert.equal(scans, 1)
     assert.equal(Boolean(view.find({ label: 'design-guide' })), true)
@@ -177,6 +177,7 @@ test('failed discovery can be retried without showing a false ready state', asyn
   try {
     await view.select({ label: 'Traffic Light views' }, 'library')
     assert.equal(Boolean(view.find({ text: 'Could not read the library. Your existing setup is unchanged.' })), true)
+    assert.equal(view.find({ type: 'EmptyState' }), null)
     assert.equal(view.find({ text: 'Instructions ready' }), null)
     fail = false
     await view.press({ text: 'Try again' })
@@ -283,10 +284,16 @@ test('automatic connection changes only after explicit enable or apply', async (
     assert.deepEqual(updates, [])
     assert.equal(view.find({ text: 'Prepare use instructions' }), null)
     await view.press({ text: 'Connect' })
+    assert.ok(view.find({ type: 'Badge', text: 'Enabled' }))
+    assert.equal(view.find({ type: 'Badge', text: 'Enabled · 1' }), null)
+    await view.press({ text: 'Import 1' })
+    assert.ok(view.find({ type: 'Badge', text: 'Enabled · 1' }))
+    await view.press({ text: 'Shared library 2' })
     assert.deepEqual(updates, [true])
     await view.toggle({ label: 'figma-local' })
     assert.deepEqual(updates, [true])
     assert.equal(Boolean(view.find({ text: 'Selection has unapplied changes.' })), true)
+    assert.ok(view.find({ type: 'Badge', text: 'Enabled · 1' }))
     await view.press({ text: 'Apply selection' })
     assert.deepEqual(updates, [true, true])
     assert.equal(view.find({ text: 'Selection has unapplied changes.' }), null)
@@ -331,7 +338,9 @@ test('import groups equivalent names by kind, compares safely, and grants no wor
     assert.deepEqual(invoked, [])
     await view.press({ text: 'Add from Claude' })
     assert.deepEqual(invoked, ['claude'])
-    assert.equal(Boolean(view.find({ text: 'Added' })), true)
+    assert.ok(view.find({ text: 'Added · Claude' }))
+    assert.ok(view.find({ text: 'Compare' }))
+    assert.ok(view.find({ text: 'Import 2' }))
     await view.press({ text: 'Shared library 1' })
     assert.equal(view.valueOf({ label: 'jev' }), false)
     assert.deepEqual(view.errors, [])
@@ -386,7 +395,7 @@ test('legacy provider selections can be removed independently, and incompatible 
   try {
     await view.select({ label: 'Traffic Light views' }, 'library')
     assert.equal(view.find({ label: old.name }), null)
-    await view.press({ text: 'Selected 1' })
+    await view.press({ text: 'Selected only' })
     assert.equal(view.valueOf({ label: old.name }), true)
     await view.toggle({ label: old.name })
     assert.deepEqual(current.selected, [])
@@ -398,5 +407,63 @@ test('legacy provider selections can be removed independently, and incompatible 
     assert.equal(view.find({ text: 'Add' }), null)
     assert.equal(view.find({ text: 'Copy adaptation request' }), null)
     assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('same-workspace terminal updates preserve searches and an empty filter can be reset in one step', async () => {
+  const host = mockHost({ requests: { 'calls.get': calls, 'toolbox.catalog': () => catalog, 'toolbox.state': initial } })
+  const view = await mount(panel, { host, locale: 'ko-KR' })
+  try {
+    await view.select({ label: 'Traffic Light 보기' }, 'library')
+    await view.type({ label: '기능 검색' }, 'unmatched-name')
+    await view.emit('workspace.changed', { context: { workspaceId: 'workspace-a', displayName: 'A', branch: 'main', terminals: [{ id: 'new-terminal' }] } })
+    assert.equal(view.valueOf({ label: '기능 검색' }), 'unmatched-name')
+    await view.press({ text: '필터 초기화' })
+    assert.ok(view.find({ label: 'design-guide' }))
+  } finally { await view.unmount() }
+})
+
+test('clearing an applied selection shows the grant still in use and its connection control', async () => {
+  let current: ToolboxState = { ...initial(), selected: ['skill:design'], automation: { enabled: true, setup: true, appliedIds: ['skill:design'], providers: [], sessions: 2 } }
+  let autoChanges = 0
+  const host = mockHost({ requests: {
+    'calls.get': calls, 'toolbox.catalog': () => catalog, 'toolbox.state': () => current,
+    'toolbox.select': ({ ids }) => { current = { ...current, selected: ids }; return current },
+    'toolbox.automation': () => { autoChanges++; return current }
+  } })
+  const view = await mount(panel, { host })
+  try {
+    await view.select({ label: 'Traffic Light views' }, 'library')
+    await view.press({ label: 'Clear selection' })
+    assert.ok(view.find({ text: 'New sessions still use 1 previously applied item.' }))
+    await view.press({ type: 'Button', text: 'Connection settings' })
+    assert.equal(view.valueOf({ label: 'Connect automatically in new sessions' }), true)
+    assert.equal(autoChanges, 0)
+  } finally { await view.unmount() }
+})
+
+test('late workspace state reads cannot replace a newer selection', async () => {
+  let phase = 0, notifyFirst!: () => void, notifySecond!: () => void, complete!: (value: ToolboxState) => void
+  const first = new Promise<void>(resolve => { notifyFirst = resolve })
+  const second = new Promise<void>(resolve => { notifySecond = resolve })
+  const fresh = { ...initial(), selected: ['skill:design'] }
+  const host = mockHost({ requests: { 'calls.get': calls, 'toolbox.catalog': () => catalog, 'toolbox.state': () => {
+    if (!phase) return initial()
+    if (phase++ === 1) return new Promise<ToolboxState>(resolve => { complete = resolve; notifyFirst() })
+    notifySecond()
+    return fresh
+  } } })
+  const view = await mount(panel, { host })
+  try {
+    await view.select({ label: 'Traffic Light views' }, 'library')
+    phase = 1
+    const older = view.post('toolbox.changed', {})
+    await first
+    const newer = view.post('toolbox.changed', {})
+    await second
+    complete(initial())
+    await Promise.all([older, newer])
+    await view.rerender()
+    assert.equal(view.valueOf({ label: 'design-guide' }), true)
   } finally { await view.unmount() }
 })

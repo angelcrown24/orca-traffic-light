@@ -30,7 +30,7 @@ Open **Activity** and turn on **Settings & privacy → Show chat activity**. In 
 
 | In the panel | What it tells you |
 | --- | --- |
-| **Detected items** | Skill, plugin, and MCP server names observed in calls or skill paths. |
+| **Detected items** | Skills, plugins and MCP servers observed in this workspace. Items in use appear first. Page through longer lists. |
 | **In use** | The item was observed in an ongoing agent turn or running request. |
 | **Jev** | The shared runner linked this skill read or MCP call to a Jev recommendation in the same conversation. |
 | **Session activity** | Running shell calls, background commands and active subagents in the selected session. A selected live terminal shows **Connected**. |
@@ -44,7 +44,7 @@ For a Gemini chat running through Antigravity, enable **Show Antigravity subagen
 
 For example, you can make a skill installed for Claude Code available to Codex in one workspace.
 
-1. In **Library → Import**, find the skill and press **Add**. When providers have different copies under the same name, use **Choose source** to select the one you want.
+1. In **Library → Import**, find the skill and press **Add**. When providers have different copies under the same name, use **Choose source** to select one. The other copies stay available for review.
 2. In **Shared library**, select the skill or MCP server for this workspace. You can select up to 24 items. The initial selection is empty.
 3. Press **Connect**. Traffic Light installs shared instructions and a local launcher. Agents that load those instructions can search the selection, read a skill, or call a tool on demand. Browsing the library starts no MCP servers.
 4. After changing a selection, press **Apply selection**. New connections use the updated selection. For an existing conversation that has not loaded the instructions, open **Connection settings → Manual connection** to prepare a guide for that conversation.

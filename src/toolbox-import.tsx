@@ -171,7 +171,7 @@ function Sources({ group, workspaceId, disabled, add }: SourceProps) {
     })}
   </Stack>
 }
-export function ImportRow({ group, workspaceId, added, disabled, add }: SourceProps & { added: boolean }) {
+export function ImportRow({ group, workspaceId, added, receipt, disabled, add }: SourceProps & { added: boolean; receipt?: SourceGroup }) {
   const t = labels(), action = actionOf(group), open = read(expanded) === group.key
   const source = providers(group.items)
   const type = group.kind === 'skill' ? t.skill : 'MCP'
@@ -191,6 +191,7 @@ export function ImportRow({ group, workspaceId, added, disabled, add }: SourcePr
           else return openDetails(group)
         }}>{open ? t.close : review === 'different' ? t.viewDiff : t[action]}</Button>}
     </Row>
+    {!added && receipt ? <Text size="xs" tone="success">{[t.added, providers(receipt.items)].filter(Boolean).join(' · ')}</Text> : null}
     {action === 'add' && !added && group.items[0].skillRequirements ? <Collapsible title={t === words.ko ? '필요 환경' : 'Requirements'}><Text size="xs" muted>{group.items[0].skillRequirements}</Text></Collapsible> : null}
     {open && !added ? <Sources group={group} workspaceId={workspaceId} disabled={disabled} add={add} /> : null}
   </Box>

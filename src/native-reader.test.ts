@@ -102,7 +102,7 @@ test('merges bounded journal resources only when opted in and only for matching 
   const id = 'codex_12345678_abcd_1234_abcd_123456789abc'
   let enabled = false
   let queries = 0
-  const snapshot = { result: { worktrees: [{ hostId: 'local', address: { worktree: 'identity:one' }, agents: [{ structuredHostOwned: true, paneKey: `structured-agent-session-${id}:pane`, state: 'working', toolName: 'shell' }] }] } }
+  const snapshot = { result: { worktrees: [{ hostId: 'local', worktreeId: 'canonical', address: { worktree: 'identity:one' }, agents: [{ structuredHostOwned: true, paneKey: `structured-agent-session-${id}:pane`, state: 'working', toolName: 'shell' }] }] } }
   const read = createNativeReader(async () => enabled, async () => 'identity:one', async () => snapshot, async (sid) => {
     queries++
     assert.equal(sid, id)
@@ -120,7 +120,7 @@ test('merges bounded journal resources only when opted in and only for matching 
 test('discards journal results if workspace changes while reading', async () => {
   const id = 'codex_12345678_abcd_1234_abcd_123456789abc'
   let workspace = 'identity:one'
-  const snapshot = { result: { worktrees: [{ hostId: 'local', address: { worktree: 'identity:one' }, agents: [{ structuredHostOwned: true, paneKey: `structured-agent-session-${id}:pane` }] }] } }
+  const snapshot = { result: { worktrees: [{ hostId: 'local', worktreeId: 'canonical', address: { worktree: 'identity:one' }, agents: [{ structuredHostOwned: true, paneKey: `structured-agent-session-${id}:pane` }] }] } }
   const read = createNativeReader(async () => true, async () => workspace, async () => snapshot, async () => {
     workspace = 'identity:other'
     return { status: 'ready', resources: [{ category: 'skill', name: 'private', evidence: 'inferred' }] }
@@ -132,7 +132,7 @@ test('active resources follow the working agent turn and clear after it finishes
   const id = 'codex_12345678_abcd_1234_abcd_123456789abc'
   const otherId = 'codex_87654321_abcd_1234_abcd_123456789abc'
   let state = 'working'
-  const snapshot = () => ({ result: { worktrees: [{ hostId: 'local', address: { worktree: 'identity:one' }, agents: [
+  const snapshot = () => ({ result: { worktrees: [{ hostId: 'local', worktreeId: 'canonical', address: { worktree: 'identity:one' }, agents: [
     { structuredHostOwned: true, paneKey: `structured-agent-session-${id}:pane`, state, toolName: 'shell', toolInput: 'cat /tmp/skills/current/SKILL.md' },
     { structuredHostOwned: true, paneKey: `structured-agent-session-${otherId}:pane`, state: 'done', toolName: 'mcp__stale__run' }
   ] }] } })
@@ -225,4 +225,42 @@ test('Antigravity lookup needs separate consent, preserves the journal on failur
   assert.deepEqual((await read()).activities, fallback)
   mode = 'revoke'
   assert.deepEqual((await read()).activities, fallback)
+})
+
+test('drops cached detections if a full snapshot no longer identifies a unique workspace', async () => {
+  const row = { worktreeId: 'one', agents: [{ state: 'working', toolName: 'mcp__camera__read' }] }
+  let rows = [row]
+  const read = createNativeReader(async () => true, async () => 'one', async () => ({ result: { worktrees: rows } }))
+  assert.equal((await read()).resources.length, 1)
+  for (const unresolved of [[], [row, row]]) {
+    rows = unresolved
+    assert.deepEqual(await read(), { status: 'unavailable', activities: [], resources: [] })
+    rows = [{ ...row, agents: [] }]
+    assert.deepEqual((await read()).resources, [])
+  }
+})
+
+test('journal reads require a single pane owner and use the canonical workspace even when selected through an alias', async () => {
+  const sid = '01234567-abcd-4123-abcd-123456789abc'
+  const pane = { structuredHostOwned: true, paneKey: 'structured-agent-session-' + sid + ':leaf', state: 'working',
+    mainAgent: { state: 'done' }, toolName: 'mcp__previous__call' }
+  const row = { worktreeId: 'one', hostId: 'local', address: { worktree: 'identity:alias' }, agents: [pane] }
+  const other = { ...row, worktreeId: 'two', address: { worktree: 'two' } }
+  let worktrees = [other, row]
+  const reads: string[] = []
+  const read = createNativeReader(async () => true, async () => 'identity:alias', async () => ({ result: { worktrees } }),
+    async (_sid, _children, owner, rootWorking) => {
+      reads.push(owner)
+      assert.equal(rootWorking, false)
+      return { status: 'ready', resources: [] }
+    })
+  await read()
+  worktrees = [row, other]
+  await read()
+  assert.deepEqual(reads, [])
+  worktrees = [row]
+  const result = await read()
+  assert.deepEqual(reads, ['one'])
+  assert.deepEqual(result.activeResources, [])
+  assert.equal(result.resources[0].name, 'previous')
 })

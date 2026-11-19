@@ -1,15 +1,19 @@
 import { Badge, Box, Heading, Row, Stack, Text } from 'orca'
+import { isShared, sourceGroups } from './toolbox-import'
 import { englishCount } from './panel-language'
 import type { CatalogItem, ToolboxState } from './toolbox-types'
 
 const providers = ['Codex', 'Claude', 'Gemini', 'Antigravity']
 const providerKey = (name: string) => name.toLowerCase().replace(/\s+(code|cli)$/, '')
 export function topology(items: CatalogItem[], state: ToolboxState) {
-  const counts = (subset: CatalogItem[]) => ({ skills: subset.filter(item => item.kind === 'skill').length, mcp: subset.filter(item => item.kind === 'mcp').length })
+  const counts = (subset: CatalogItem[]) => {
+    const groups = sourceGroups(subset)
+    return { skills: groups.filter(group => group.kind === 'skill').length, mcp: groups.filter(group => group.kind === 'mcp').length }
+  }
   const applied = state.automation?.enabled ? new Set(state.automation.appliedIds ?? []) : new Set<string>()
   return {
     providers: providers.map(name => ({ name, ...counts(items.filter(item => item.providers.some(provider => providerKey(provider) === providerKey(name)))) })),
-    catalog: counts(items), shared: counts(items.filter(item => item.sharing?.state === 'shared')),
+    catalog: counts(items), shared: counts(items.filter(isShared)),
     selected: state.selected.length, applied: applied.size,
     sessions: state.automation?.sessions ?? 0,
     running: state.events.filter(event => event.state === 'running').length,
@@ -51,7 +55,7 @@ export function ArchitectureDiagram({ items, state, ko }: { items: CatalogItem[]
     </Box>
     <Stem />
     <Box direction="column" gap="sm" align="center" padding="sm" border radius="md" background="muted">
-      <Text size="sm" weight="semibold">{ko ? 'Traffic Light · 최근 실행 기록' : 'Traffic Light · recent calls'}</Text>
+      <Text size="sm" weight="semibold">{ko ? '공용 실행기 기록' : 'Shared runner history'}</Text>
       <Row gap="md" justify="center"><Text size="sm" tone="success">{`${ko ? '완료' : 'Completed'} ${data.succeeded}`}</Text><Text size="sm" tone={data.failed ? 'danger' : 'neutral'}>{`${ko ? '실패' : 'Failed'} ${data.failed}`}</Text></Row>
     </Box>
   </Stack>

@@ -341,7 +341,7 @@ test('Jev suggestions and observed use are linked by handle and item, never by n
   const { home, workspace, runtime, events } = await fixture(t, {
     rankEnv: { TYPESAFE_BASE_URL: 'http://127.0.0.1:' + ranker.address().port },
     onRecommendations: (workspaceId, rows) => { assert.equal(workspaceId, 'project'); recommendations.push(...rows) },
-    resolveRecord: async record => { reads++; return record.kind === 'skill' ? { path: record.path } : { command: process.execPath, args: ['-e', fake] } }
+    resolveRecord: async record => { reads++; return record.kind === 'skill' ? { path: record.path, content: await readFile(record.path, 'utf8') } : { command: process.execPath, args: ['-e', fake] } }
   })
   const skill = { id: 'ui', kind: 'skill', name: 'interface guide', description: 'Accessible UI' }
   const storage = { id: 'db', kind: 'skill', name: 'schema guide', description: 'SQL schemas' }

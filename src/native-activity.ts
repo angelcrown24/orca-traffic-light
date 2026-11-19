@@ -41,12 +41,8 @@ export function workspaceRow(response: unknown, workspaceId: string): Record<str
   return matches.length === 1 ? matches[0] : null
 }
 
-/** A globally capped page may still contain the exact requested workspace. */
-export function missingFromPartialSnapshot(response: unknown, workspaceId: string): boolean {
-  return object(object(response)?.result)?.truncated === true && !workspaceRow(response, workspaceId)
-}
-
 const validChildId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(value)
+const isChildContainer = (child: Record<string, unknown>) => child.kind === 'workflow' || child.kind === 'monitor' || child.kind === 'command'
 const isChildAgent = (child: Record<string, unknown>) => child.kind === undefined || child.kind === 'agent'
 const legacyChildState = (state: unknown) => state === 'working' || state === 'waiting' || state === 'idle' || state === 'blocked' || state === 'unverifiable'
 
@@ -69,32 +65,40 @@ function providerMaySupplyChildren(parent: Record<string, unknown>): boolean {
   if (parent.children === undefined) return parent.subagents === undefined || (Array.isArray(parent.subagents) && !parent.subagents.length)
   return Array.isArray(parent.children) && parent.children.length <= 50 && parent.children.every(value => {
     const child = object(value)
-    return child && validChildId(child.id) && (child.kind === 'command' || child.kind === 'workflow' || child.kind === 'monitor') &&
+    return child && validChildId(child.id) && isChildContainer(child) &&
       (child.membership === 'live' || child.membership === 'settled') &&
       (legacyChildState(child.state) || child.state === 'monitoring' || child.state === 'done') &&
       (child.children === undefined || (Array.isArray(child.children) && !child.children.length))
   })
 }
 
-// A local journal belongs to a single pane in a single workspace. Multiple valid
-// claims to the same sampled session make a provider-side lookup ambiguous.
-function uniqueJournalSessionIds(response: unknown, workspaceId: string): Set<string> {
-  const sampled = nativeJournalSessions(response, workspaceId).sessions
-  const eligible = new Set(sampled.map(session => session.id))
-  if (!eligible.size) return eligible
-  const result = object(object(response)?.result)
+// A session claimed by more than one local pane cannot identify an unambiguous owner.
+export function localSessionOwners(response: unknown, workspace: Record<string, unknown> | null) {
+  const owners = new Map<string, Record<string, unknown>>()
+  const worktrees = object(object(response)?.result)?.worktrees
+  if (workspace?.hostId !== 'local' || !Array.isArray(worktrees)) return owners
   const seen = new Set<string>()
-  for (const value of Array.isArray(result?.worktrees) ? result.worktrees : []) {
+  for (const value of worktrees) {
     const row = object(value)
     if (row?.hostId !== 'local' || !Array.isArray(row.agents)) continue
-    for (const rawAgent of row.agents) {
-      const id = sessionId(object(rawAgent))
-      if (!id || !eligible.has(id)) continue
-      if (seen.has(id)) eligible.delete(id)
+    for (const raw of row.agents) {
+      const agent = object(raw)
+      const id = sessionId(agent)
+      if (!id || !agent) continue
+      if (seen.has(id)) owners.delete(id)
+      else if (row === workspace) owners.set(id, agent)
       seen.add(id)
     }
   }
-  return eligible
+  return owners
+}
+
+function uniqueJournalSessionIds(response: unknown, workspaceId: string) {
+  return new Set(nativeJournalSessions(response, workspaceId).sessions.map(s => s.id))
+}
+
+export function mainAgentWorking(agent: Record<string, unknown>) {
+  return agent.state === 'working' && (object(agent.mainAgent)?.state ?? agent.state) === 'working'
 }
 
 export function antigravityChildSessionIds(response: unknown, workspaceId: string): string[] {
@@ -120,21 +124,24 @@ export function parseNativeActivity(response: unknown, workspaceId: string, invo
   const activities: NativeActivity[] = []
   const uniqueIds = invocations.size || providerChildren.size ? uniqueJournalSessionIds(response, workspaceId) : new Set<string>()
   let childCount = 0
+  let remainingNodes = 150
   const addChildren = (children: unknown, parentType: string | null, liveParent: boolean, depth: number, seen: Set<string>): void => {
     if (!Array.isArray(children) || depth > 3 || childCount >= 50) return
     for (const value of children.slice(0, 50)) {
-      if (childCount >= 50) break
+      if (childCount >= 50 || --remainingNodes < 0) break
       const child = object(value)
-      if (!child || !isChildAgent(child) || !validChildId(child.id) || seen.has(child.id)) continue
+      if (!child || !(isChildAgent(child) || isChildContainer(child)) || !validChildId(child.id) || seen.has(child.id)) continue
       const state = child.state
       if (state !== 'working' && state !== 'monitoring' && state !== 'blocked' && state !== 'waiting' && state !== 'idle' && state !== 'unverifiable') continue
       seen.add(child.id)
-      childCount++
       const live = liveParent && child.membership === 'live'
-      // Only short machine-style task identifiers are displayed, never arbitrary descriptions or prompts.
-      const name = typeof child.description === 'string' && /^[a-z][a-z0-9_]{0,31}$/.test(child.description) ? child.description : undefined
-      activities.push({ agentType: parentType, state: !live ? 'unverifiable' : state === 'idle' ? 'waiting' : state,
-        toolName: null, role: 'subagent', ...(name ? { label: name } : {}) })
+      if (isChildAgent(child)) {
+        childCount++
+        // Only short machine-style task identifiers are displayed, never arbitrary descriptions or prompts.
+        const name = typeof child.description === 'string' && /^[a-z][a-z0-9_]{0,31}$/.test(child.description) ? child.description : undefined
+        activities.push({ agentType: parentType, state: !live ? 'unverifiable' : state === 'idle' ? 'waiting' : state,
+          toolName: null, role: 'subagent', ...(name ? { label: name } : {}) })
+      }
       addChildren(child.children, parentType, live && state !== 'unverifiable', depth + 1, seen)
     }
   }
@@ -186,7 +193,7 @@ export function parseNativeActiveResources(response: unknown, workspaceId: strin
   const resources: ResourceObservation[] = []
   for (const value of row.agents) {
     const agent = object(value)
-    if (agent?.state !== 'working' || typeof agent.toolName !== 'string') continue
+    if (!agent || !mainAgentWorking(agent) || typeof agent.toolName !== 'string') continue
     resources.push(...classifyResources(agent.toolName, agent.toolInput))
   }
   return resources
@@ -208,18 +215,10 @@ export function sessionId(agent: Record<string, unknown> | null): string | null 
 
 export function nativeJournalSessions(response: unknown, workspaceId: string) {
   const row = workspaceRow(response, workspaceId)
-  const sessions = new Map<string, { id: string; agentType: string | null; working: boolean; updatedAt: number }>()
-  if (row?.hostId === 'local' && Array.isArray(row.agents)) {
-    for (const value of row.agents) {
-      const agent = object(value)
-      const id = sessionId(agent)
-      if (!agent || !id) continue
-      const working = agent.state === 'working'
-      if (sessions.get(id)?.working && !working) continue
-      sessions.set(id, { id, agentType: label(agent.agentType), working, updatedAt: typeof agent.updatedAt === 'number' ? agent.updatedAt : 0 })
-    }
-  }
-  const sorted = [...sessions.values()].sort((a, b) => Number(b.working) - Number(a.working) || b.updatedAt - a.updatedAt)
+  const sorted = [...localSessionOwners(response, row)].map(([id, agent]) => ({
+    id, agentType: label(agent.agentType), working: agent.state === 'working', rootWorking: mainAgentWorking(agent),
+    updatedAt: typeof agent.updatedAt === 'number' ? agent.updatedAt : 0
+  })).sort((a, b) => Number(b.working) - Number(a.working) || b.updatedAt - a.updatedAt)
   return { sessions: sorted.slice(0, 4), truncated: sorted.length > 4 }
 }
 
@@ -256,12 +255,13 @@ export function nativeWorkingChildIds(response: unknown, workspaceId: string): M
       for (const value of children) {
         if (--budget < 0) break
         const child = object(value)
-        if (!child || !isChildAgent(child)) continue
-        const live = liveParent && child.membership === 'live' && child.state === 'working'
-        if (validChildId(child.providerId)) {
-          states.set(child.providerId, states.has(child.providerId) ? false : live)
+        if (!child || !(isChildAgent(child) || isChildContainer(child))) continue
+        const verified = liveParent && child.membership === 'live'
+          && (child.state === 'working' || child.state === 'monitoring' || child.state === 'waiting' || child.state === 'blocked' || child.state === 'idle')
+        if (isChildAgent(child) && validChildId(child.providerId)) {
+          states.set(child.providerId, !states.has(child.providerId) && verified && child.state === 'working')
         }
-        if (depth < 3 && Array.isArray(child.children)) visit(child.children, depth + 1, live)
+        if (depth < 3 && Array.isArray(child.children)) visit(child.children, depth + 1, verified)
       }
     }
     visit(childRoster(group[0]), 1, true)

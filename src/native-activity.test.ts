@@ -254,3 +254,21 @@ test('selects current UUID and settled native sessions while rejecting mismatche
   const mismatch = { result: { worktrees: [{ hostId: 'local', worktreeId: 'this', agents: [{ ...agents[6], orcaSessionId: ids[1] }, { ...agents[1], structuredHostOwned: false }] }] } }
   assert.equal(nativeJournalSessions(mismatch, 'this').sessions.length, 0)
 })
+
+test('discovers active agent descendants in verified workflow and monitor nodes without displaying the containers', () => {
+  const sid = '01234567-abcd-4123-abcd-123456789abc'
+  const sub = { kind: 'agent', id: 'nested', providerId: 'nested', description: 'reviewer', membership: 'live', state: 'working' }
+  const wrapper = { kind: 'workflow', id: 'workflow', membership: 'live', state: 'monitoring', children: [
+    { kind: 'monitor', id: 'watch', membership: 'live', state: 'monitoring', children: [sub] }
+  ] }
+  const snapshot = (membership: string) => ({ result: { worktrees: [{ worktreeId: 'one', hostId: 'local', agents: [
+    { structuredHostOwned: true, paneKey: 'structured-agent-session-' + sid + ':leaf', state: 'working',
+      subagentObservation: 'live', children: [{ ...wrapper, membership }] }
+  ] }] } })
+  for (const membership of ['live', 'settled']) {
+    const data = snapshot(membership)
+    assert.deepEqual(parseNativeActivity(data, 'one').filter(r => r.role).map(r => [r.label, r.state]),
+      [['reviewer', membership === 'live' ? 'working' : 'unverifiable']])
+    assert.deepEqual([...nativeWorkingChildIds(data, 'one').get(sid)!], membership === 'live' ? ['nested'] : [])
+  }
+})

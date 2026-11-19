@@ -9,13 +9,18 @@ type Query = (sql: string) => Promise<unknown>
 const MAX_CALLS = 300
 
 /** Do not accept a path, quote, or arbitrary SQL as an identifier. */
-export function journalQuery(sessionId: string): string | null {
-  if (!validSessionId(sessionId)) return null
+export function journalEpoch(sessionId: string, workspaceId: string): string | null {
+  if (!validSessionId(sessionId) || !workspaceId || workspaceId.length > 4096 || /[\x00-\x1f\x7f]/.test(workspaceId)) return null
+  const owner = "'" + workspaceId.replace(/'/g, "''") + "'"
+  return `SELECT epoch FROM journal_chat_state WHERE session_id='${sessionId}' AND workspace_id=${owner}`
+}
+
+export function journalQuery(sessionId: string, workspaceId: string): string | null {
+  const epoch = journalEpoch(sessionId, workspaceId)
+  if (!epoch) return null
   // sessionId is strictly validated before interpolation. SQLite JSON extracts only the
   // tool name and a bounded input; messages and tool outputs never reach the worker.
-  return `WITH current AS (
-    SELECT epoch FROM journal_chat_state WHERE session_id='${sessionId}'
-  ), latest_turn AS (
+  return `WITH current AS (${epoch}), latest_turn AS (
     SELECT item_id, lifecycle_state FROM journal_items
     WHERE session_id='${sessionId}' AND epoch=(SELECT epoch FROM current)
       AND hidden=0 AND root=1 AND kind='turn' AND turn_marker=1
@@ -64,8 +69,8 @@ export function queryLocalJournal(sql: string): Promise<unknown> {
 }
 
 /** Only display labels returned by the classifier, never commands, prompts or outputs. */
-export async function readJournalActivity(sessionId: string, query: Query = queryLocalJournal, workingChildren: ReadonlySet<string> = new Set()): Promise<JournalResult> {
-  const sql = journalQuery(sessionId)
+export async function readJournalActivity(sessionId: string, workspaceId: string, query: Query = queryLocalJournal, workingChildren: ReadonlySet<string> = new Set(), rootWorking = true): Promise<JournalResult> {
+  const sql = journalQuery(sessionId, workspaceId)
   if (!sql) return { status: 'unavailable', resources: [] }
   try {
     const value = await query(sql)
@@ -81,7 +86,7 @@ export async function readJournalActivity(sessionId: string, query: Query = quer
     const recentTools: JournalToolCall[] = []
     let lastSubagentInvocationAt = 0
     for (const item of calls.slice(0, MAX_CALLS)) {
-      const owner = item.is_root === 1 || (item.is_root === 0 && typeof item.producer === 'string' && workingChildren.has(item.producer))
+      const owner = (item.is_root === 1 && rootWorking) || (item.is_root === 0 && typeof item.producer === 'string' && workingChildren.has(item.producer))
       const active = item.active === 1 && owner
       const identity = { server: item.mcp_server, tool: item.mcp_tool }
       const name = nativeToolName(item.name, item.input, identity)

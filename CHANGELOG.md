@@ -1,5 +1,12 @@
 # Release history
 
+## [v0.10.1](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.10.1) · Clearer activity and more reliable shared tools
+
+- Activity puts resources in use first, pages longer lists and shows a single empty state. A manually selected session that closes prompts you to choose another.
+- Native tool history checks the workspace that owns each journal. A finished parent’s tool badge clears while its delegated work can stay visible. Reused call IDs from different terminal agents retain separate histories.
+- Importing one provider’s copy keeps the other variants visible. Library search and source reviews survive terminal updates in the same workspace. The diagram counts registered copies that are awaiting an update or conflict review.
+- The shared runner handles MCP server pings and tool-list changes on stdio and open HTTP response streams. Skill reads deliver the same content that passed verification.
+
 ## [v0.10.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.10.0) · Watch the selected session
 
 - **Session activity** brings running shell calls, background commands and active subagents together. On macOS it follows the selected local chat or split terminal when Orca reports its identity. You can also choose a session manually.

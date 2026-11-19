@@ -24,7 +24,8 @@ function mergeResources(items: ResourceObservation[]): ResourceObservation[] {
     const previous = unique.get(key)
     if (!previous || item.evidence === 'observed') unique.set(key, item)
   }
-  return [...unique.values()].slice(-LIMIT)
+  // Workspace calls arrive newest first. Keep their order when enforcing the cap.
+  return [...unique.values()].slice(0, LIMIT)
 }
 
 export default function activate(orca: OrcaWorkerApi): void {
@@ -50,55 +51,62 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('toolbox.compare', toolbox.compare)
   orca.panels.handle('toolbox.sync', toolbox.sync)
   void toolbox.initialize()
-  const terminals = new Map<string, Map<string, ObservedCall>>()
+  const terminals = new Map<string, Map<number, ObservedCall>>()
   let order = 0
-
-  orca.hooks.on('agent.tool.before', (event) => {
-    if (!event.terminalId) return
-    let calls = terminals.get(event.terminalId)
+  function terminalCalls(id: string) {
+    let calls = terminals.get(id)
     if (!calls) {
       if (terminals.size >= LIMIT) terminals.delete(terminals.keys().next().value!)
       calls = new Map()
     }
-    // Most recently used terminals remain in the bounded cache.
-    terminals.delete(event.terminalId)
-    terminals.set(event.terminalId, calls)
+    terminals.delete(id)
+    terminals.set(id, calls)
+    return calls
+  }
+  function latestWithId(calls: Map<number, ObservedCall>, event: { agent: string; tool: string; callId?: string }) {
+    if (!event.callId) return undefined
+    let latest: ObservedCall | undefined
+    for (const row of calls.values()) {
+      if (row.callId === event.callId && row.call.agent === event.agent && row.call.tool === event.tool) latest = row
+    }
+    return latest
+  }
+
+  orca.hooks.on('agent.tool.before', (event) => {
+    if (!event.terminalId) return
+    const calls = terminalCalls(event.terminalId)
+    const existing = latestWithId(calls, event)
+    if (existing?.call.state === 'running') {
+      const resources = mergeResources([...existing.resources, ...classifyResources(event.tool, event.input)])
+      calls.set(existing.order, { ...existing, resources, lookup: existing.lookup ?? directJevCommand(event.tool, event.input) })
+      orca.panels.post('calls.changed', {})
+      return
+    }
     const index = ++order
-    const key = event.callId ? `id:${event.callId}` : `anonymous:${index}`
     const startedAt = Date.now()
     const id = JSON.stringify([startedAt, index])
-    calls.delete(key)
-    calls.set(key, { call: { id, tool: event.tool, agent: event.agent, state: 'running' }, order: index, callId: event.callId, lookup: directJevCommand(event.tool, event.input), resources: classifyResources(event.tool, event.input), startedAt })
+    calls.set(index, { call: { id, tool: event.tool, agent: event.agent, state: 'running' }, order: index, callId: event.callId, lookup: directJevCommand(event.tool, event.input), resources: classifyResources(event.tool, event.input), startedAt })
     while (calls.size > LIMIT) calls.delete(calls.keys().next().value!)
     orca.panels.post('calls.changed', {})
   })
   orca.hooks.on('agent.tool.after', (event) => {
     if (!event.terminalId) return
-    let calls = terminals.get(event.terminalId)
-    if (!calls) {
-      if (terminals.size >= LIMIT) terminals.delete(terminals.keys().next().value!)
-      calls = new Map()
-      terminals.set(event.terminalId, calls)
-    }
-    const exactKey = event.callId ? `id:${event.callId}` : undefined
-    const exact = exactKey ? calls.get(exactKey) : undefined
-    if (exact && exact.call.agent === event.agent && exact.call.tool === event.tool && exact.call.state === 'finished') return
-    const matches = [...calls.entries()].filter(([, observed]) =>
+    const calls = terminalCalls(event.terminalId)
+    const exact = latestWithId(calls, event)
+    const matches = [...calls.values()].filter(observed =>
       observed.call.state === 'running' && observed.call.agent === event.agent && observed.call.tool === event.tool &&
       (!event.callId || !observed.callId || event.callId === observed.callId))
-    const chosen = exactKey && exact?.call.state === 'running' && exact.call.agent === event.agent && exact.call.tool === event.tool
-      ? [exactKey, exact] as const : matches.length === 1 ? matches[0] : undefined
-    if (chosen) {
-      const [key, observed] = chosen
-      calls.set(key, { ...observed, call: { ...observed.call, state: 'finished' }, lookup: observed.lookup ?? directJevCommand(event.tool, event.input), resources: mergeResources([...observed.resources, ...classifyResources(event.tool, event.input)]) })
+    if (exact && exact.call.state !== 'running') return
+    const observed = exact ?? (matches.length === 1 ? matches[0] : undefined)
+    if (observed) {
+      calls.set(observed.order, { ...observed, callId: observed.callId ?? event.callId, call: { ...observed.call, state: 'finished' }, lookup: observed.lookup ?? directJevCommand(event.tool, event.input), resources: mergeResources([...observed.resources, ...classifyResources(event.tool, event.input)]) })
     } else if (matches.length > 1) {
-      for (const [key, observed] of matches) calls.set(key, { ...observed, call: { ...observed.call, state: 'uncertain' } })
+      for (const row of matches) calls.set(row.order, { ...row, call: { ...row.call, state: 'uncertain' } })
     } else {
       // We saw an end but cannot identify its start. Keep it visible without claiming success.
       const index = ++order
-      const key = `unpaired:${index}`
       const startedAt = Date.now()
-      calls.set(key, { call: { id: JSON.stringify([startedAt, index]), tool: event.tool, agent: event.agent, state: 'uncertain' }, order: index, lookup: directJevCommand(event.tool, event.input), resources: classifyResources(event.tool, event.input), startedAt })
+      calls.set(index, { call: { id: JSON.stringify([startedAt, index]), tool: event.tool, agent: event.agent, state: 'uncertain' }, order: index, callId: event.callId, lookup: directJevCommand(event.tool, event.input), resources: classifyResources(event.tool, event.input), startedAt })
     }
     while (calls.size > LIMIT) calls.delete(calls.keys().next().value!)
     orca.panels.post('calls.changed', {})

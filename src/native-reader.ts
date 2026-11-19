@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { antigravityChildSessionIds, parseNativeActivity, parseNativeResources, parseNativeActiveResources, nativeJournalSessions, missingFromPartialSnapshot, nativeWorkingChildIds, type NativeActivity, type ProviderChildStatus } from './native-activity'
+import { antigravityChildSessionIds, parseNativeActivity, parseNativeResources, parseNativeActiveResources, nativeJournalSessions, workspaceRow, nativeWorkingChildIds, type NativeActivity, type ProviderChildStatus } from './native-activity'
 import type { ResourceObservation } from './resource-classifier'
 import { readJournalActivity, type JournalResult, type JournalToolCall } from './journal-activity'
 
@@ -43,7 +43,8 @@ export function fetchSnapshot(): Promise<unknown> {
 
 /** Requests are deduplicated and never issued until the setting is explicitly true. */
 export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace, fetch: FetchSnapshot,
-  journal: (sessionId: string, children: ReadonlySet<string>) => Promise<JournalResult> = (id, children) => readJournalActivity(id, undefined, children),
+  journal: (sessionId: string, children: ReadonlySet<string>, workspaceId: string, rootWorking: boolean) => Promise<JournalResult> =
+    (id, children, owner, rootWorking) => readJournalActivity(id, owner, undefined, children, rootWorking),
   childStatus?: ChildStatusReader) {
   let inFlight: Promise<NativeResult> | null = null
   let workspaceId: string | null = null
@@ -65,17 +66,20 @@ export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace,
           clear()
           return empty('disabled')
         }
-        if (missingFromPartialSnapshot(snapshot, id)) return empty('unavailable')
+        const owner = workspaceRow(snapshot, id)
+        if (!owner || !Array.isArray(owner.agents)) { clear(); return empty('unavailable') }
         const { sessions, truncated } = nativeJournalSessions(snapshot, id)
         const children = nativeWorkingChildIds(snapshot, id)
         const lookupChildren = async () => {
           if (!childStatus) return undefined
           const ids = antigravityChildSessionIds(snapshot, id)
           if (!ids.length || !(await childStatus.enabled()) || epoch !== requestEpoch || (await workspace()) !== id) return undefined
-          return childStatus.read(id, ids)
+          return typeof owner.worktreeId === 'string' ? childStatus.read(owner.worktreeId, ids) : undefined
         }
         const [journals, providerChildren] = await Promise.all([
-          Promise.all(sessions.map(s => journal(s.id, children.get(s.id) ?? new Set()))),
+          Promise.all(sessions.map(async (s): Promise<JournalResult> => typeof owner.worktreeId === 'string' && owner.worktreeId
+            ? journal(s.id, children.get(s.id) ?? new Set(), owner.worktreeId, s.rootWorking)
+            : { status: 'unavailable', resources: [] })),
           lookupChildren().catch(() => undefined)
         ])
         const visibleChildren = providerChildren && await childStatus?.enabled().catch(() => false) ? providerChildren : undefined

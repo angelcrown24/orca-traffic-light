@@ -178,12 +178,14 @@ test('SQLite limits running shell metadata to the selected root active turn; inc
   INSERT INTO journal_items VALUES ('${sid}',1,0,1,'turn',1,4,0,0,'active','running',NULL,'{}');`
   const rows = [
     [sid, 'active', 'running', 1, 'execute', { command: 'git status --secret=SECRET' }],
-    [sid, 'active', 'running', 1, 'Bash', { cmd: 'python3 PRIVATE.py' }],
+    [sid, 'active', 'running', 1, 'Running functions/shell_command', { command: '/opt/homebrew/bin/python3 PRIVATE.py' }],
     [sid, 'active', 'completed', 1, 'shell', { command: 'npm SECRET' }],
     [sid, 'before', 'running', 1, 'shell', { command: 'go SECRET' }],
     [sid, 'active', 'running', 0, 'shell', { command: 'cargo SECRET' }],
     [sid, 'active', 'running', 1, 'execute', { ServerName: 'test', ToolName: 'private', command: 'sh SECRET' }],
-    [second, 'active', 'running', 1, 'run_command', { command: 'bash SECRET' }]
+    [second, 'active', 'running', 1, 'run_command', { command: 'bash SECRET' }],
+    [sid, 'active', 'running', 1, 'shell', '/bin/zsh -lc PRIVATE'],
+    [sid, 'active', 'running', 1, 'Running execute', 'unknown PRIVATE']
   ]
   const inserts = rows
     .map(
@@ -207,6 +209,7 @@ test('SQLite limits running shell metadata to the selected root active turn; inc
   assert.deepEqual(
     r.rows.map((x) => [x.name, x.since]),
     [
+      ['zsh', 107],
       ['python3', 101],
       ['git', 100]
     ]
