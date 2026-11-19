@@ -1,4 +1,4 @@
-import { atom, Badge, Box, Button, Collapsible, env, Heading, on, plugin, read, Row, Separator, set, settings, Stack, Switch, Tab, Tabs, Text, type PanelContext } from 'orca'
+import { atom, Badge, Box, Button, Collapsible, env, Heading, on, plugin, read, RelativeTime, Row, Separator, set, settings, Stack, Switch, Tab, Tabs, Text, type PanelContext } from 'orca'
 import { panelLanguage } from './panel-language'
 import type { Call } from './protocol'
 import type { ToolboxActivity } from './toolbox-types'
@@ -17,6 +17,7 @@ const workspace = atom(false)
 const loading = atom(true)
 const failed = atom(false)
 const nativeEnabled = atom(false)
+const antigravityChildEnabled = atom(false)
 const nativeStatus = atom<'disabled' | 'ready' | 'unavailable'>('disabled')
 const journalStatus = atom<'ready' | 'truncated' | 'unavailable' | undefined>(undefined)
 const nativeActivities = atom<NativeActivity[]>([])
@@ -26,6 +27,7 @@ const sharedUnavailable = atom(false)
 let sharedRequestId = 0
 let sharedDirty = true
 let nativeRequestId = 0
+let settingsReadId = 0
 let requestId = 0
 let isPanelVisible = () => false
 async function refresh(): Promise<void> {
@@ -73,9 +75,21 @@ function clearNative(status: 'disabled' | 'unavailable') {
   set(journalStatus, undefined)
   set(nativeStatus, status)
 }
-async function readNativeSetting(): Promise<void> {
-  try { set(nativeEnabled, (await settings.get('nativeActivity')) === true) }
-  catch { set(nativeEnabled, false); clearNative('unavailable') }
+async function readActivitySettings(): Promise<void> {
+  const id = ++settingsReadId
+  try {
+    const [native, child] = await Promise.all([settings.get('nativeActivity'), settings.get('antigravityChildStatus')])
+    if (id !== settingsReadId) return
+    const enabled = native === true, showChild = child === true
+    if (enabled === read(nativeEnabled) && showChild === read(antigravityChildEnabled)) return
+    set(nativeEnabled, enabled)
+    set(antigravityChildEnabled, showChild)
+    if (enabled) await refreshNative()
+    else clearNative('disabled')
+  } catch {
+    if (id !== settingsReadId) return
+    set(nativeEnabled, false); set(antigravityChildEnabled, false); clearNative('unavailable')
+  }
 }
 async function refreshNative(): Promise<void> {
   if (!read(nativeEnabled) || !isPanelVisible()) return
@@ -94,18 +108,17 @@ async function refreshNative(): Promise<void> {
     clearNative('unavailable')
   }
 }
-async function changeNative(enabled: boolean): Promise<void> {
+async function changeActivitySetting(key: 'nativeActivity' | 'antigravityChildStatus', enabled: boolean): Promise<void> {
+  if (key === 'antigravityChildStatus' && !read(nativeEnabled)) return
   try {
-    await settings.set('nativeActivity', enabled)
-    set(nativeEnabled, enabled)
-    clearNative('disabled')
-    if (enabled) await refreshNative()
-  } catch { set(nativeEnabled, false); clearNative('unavailable') }
+    await settings.set(key, enabled)
+    await readActivitySettings()
+  } catch { clearNative('unavailable') }
 }
 export function setup(ctx: PanelContext): void {
   isPanelVisible = () => read(ctx.visible) && read(tab) === 'activity'
   setupToolbox(ctx, () => read(tab) === 'library' || read(tab) === 'structure')
-  ctx.subscriptions.push({ dispose: () => { sharedRequestId++; isPanelVisible = () => false } })
+  ctx.subscriptions.push({ dispose: () => { sharedRequestId++; settingsReadId++; nativeRequestId++; isPanelVisible = () => false } })
   ctx.subscriptions.push(plugin.on('toolbox.changed', () => { void refreshShared() }))
   ctx.subscriptions.push(plugin.on('calls.changed', () => { void refresh() }))
   ctx.subscriptions.push(on('workspace.changed', () => {
@@ -120,12 +133,12 @@ export function setup(ctx: PanelContext): void {
     void refresh()
     void refreshNative()
   }))
-  ctx.subscriptions.push(settings.onDidChange(() => {
-    void readNativeSetting().then(() => { if (!read(nativeEnabled)) clearNative('disabled') })
+  ctx.subscriptions.push(settings.onDidChange(({ key }) => {
+    if (key === 'nativeActivity' || key === 'antigravityChildStatus') void readActivitySettings()
   }))
   const timer = setInterval(() => { if (isPanelVisible()) { void refresh(); void refreshNative(); if (sharedDirty) void refreshShared() } }, 3000)
   ctx.subscriptions.push({ dispose: () => clearInterval(timer) })
-  void readNativeSetting().then(() => { if (read(nativeEnabled)) void refreshNative() })
+  void readActivitySettings()
   void refresh()
   void refreshShared()
 }
@@ -136,6 +149,9 @@ const labels = {
     skill: 'Skills', plugin: 'Plugins', mcp: 'MCP servers', none: 'No items detected yet',
     empty: 'An empty list does not mean an item was unused.', inUse: 'In use',
     agent: 'Agent activity', agentName: 'Agent', subagents: 'Subagents', subagent: 'Subagent', agentNone: 'No agent activity reported.', agentOff: 'Turn on chat activity in settings to see agent status.', unavailable: 'Could not load chat activity.',
+    subagentCall: 'Subagent call', childStatusUnreported: 'Live status unavailable',
+    antigravityChildren: 'Show Antigravity subagent status', lastReported: 'Last reported', idle: 'Idle',
+    antigravityPrivacy: 'With chat activity enabled on macOS, matches the conversation ID to child agents, their status and update times in Antigravity’s local index. Excludes transcripts.',
     truncated: 'Only recent chat history is shown.', historyUnavailable: 'Recent chat history is unavailable.',
     toolCalls: 'Recent tool calls', nativeCalls: 'Native chats', sharedCalls: 'Shared runner', terminalCalls: 'Terminals', callInProgress: 'Running', callDone: 'Completed', callFailed: 'Failed', nativeChat: 'Chat',
     toolNone: 'No tool calls observed yet.', noWorkspace: 'Open a workspace to see activity.',
@@ -145,7 +161,7 @@ const labels = {
     privacyMore: 'How activity is read',
     privacyDetail: 'This chat monitor displays agent status and tool names. It does not store, log or send the chat inputs it inspects. Reads run while this panel is visible. Activity may be incomplete and short calls can be missed.',
     toolDetail: 'Finished marks the end of a terminal call. Ambiguous matches appear as uncertain.',
-    working: 'Working', blocked: 'Blocked', waiting: 'Waiting', done: 'Done', unverifiable: 'Unverified',
+    working: 'Working', monitoring: 'Monitoring', blocked: 'Blocked', waiting: 'Waiting', done: 'Done', unverifiable: 'Unverified',
     running: 'Awaiting finish', finished: 'Finished', uncertain: 'Uncertain'
   },
   ko: {
@@ -154,6 +170,9 @@ const labels = {
     skill: '스킬', plugin: '플러그인', mcp: 'MCP 서버', none: '감지된 항목 없음',
     empty: '목록에 없어도 설치했거나 사용했을 수 있습니다.', inUse: '현재 사용 중',
     agent: '에이전트 활동', agentName: '에이전트', subagents: '서브에이전트', subagent: '서브에이전트', agentNone: '보고된 에이전트 활동이 없습니다.', agentOff: '설정에서 채팅 활동을 켜면 상태를 볼 수 있습니다.', unavailable: '채팅 활동을 불러오지 못했습니다.',
+    subagentCall: '서브에이전트 호출', childStatusUnreported: '실행 상태 미확인',
+    antigravityChildren: 'Antigravity 서브에이전트 상태 표시', lastReported: '마지막 보고', idle: '대기',
+    antigravityPrivacy: 'macOS에서 채팅 활동을 켜면 현재 대화 ID로 Antigravity의 로컬 색인에서 자식 에이전트 관계, 상태, 갱신 시각을 확인합니다. 대화 본문은 조회하지 않습니다.',
     truncated: '최근 채팅 기록 일부만 표시합니다.', historyUnavailable: '최근 채팅 기록을 불러올 수 없습니다.',
     toolCalls: '최근 도구 호출', nativeCalls: '네이티브 채팅', sharedCalls: '공용 실행기', terminalCalls: '터미널', callInProgress: '실행 중', callDone: '완료', callFailed: '실패', nativeChat: '채팅',
     toolNone: '관측된 도구 호출이 없습니다.', noWorkspace: '작업공간을 열어 활동을 확인하세요.',
@@ -163,7 +182,7 @@ const labels = {
     privacyMore: '어떤 정보를 읽나요?',
     privacyDetail: '채팅 모니터는 에이전트 상태와 도구 이름을 표시합니다. 조회한 채팅 입력은 저장하거나 전송하지 않습니다. 패널이 보이는 동안 조회하며 짧은 활동은 놓칠 수 있습니다.',
     toolDetail: '터미널의 종료됨은 호출이 끝났다는 뜻입니다. 대응하는 호출이 모호하면 불확실로 표시합니다.',
-    working: '작업 중', blocked: '차단됨', waiting: '대기 중', done: '완료', unverifiable: '확인 불가',
+    working: '작업 중', monitoring: '모니터링 중', blocked: '차단됨', waiting: '대기 중', done: '완료', unverifiable: '확인 불가',
     running: '종료 대기', finished: '종료됨', uncertain: '불확실'
   }
 } as const
@@ -198,15 +217,30 @@ function ActivityPanel() {
     { category: 'mcp', title: t.mcp },
     { category: 'plugin', title: t.plugin }
   ] as const
-  const stateNames = { working: t.working, blocked: t.blocked, waiting: t.waiting, done: t.done, unverifiable: t.unverifiable }
   const callNames = { running: t.running, finished: t.finished, uncertain: t.uncertain }
-  const activities = read(nativeActivities)
-  const mainAgents = activities.filter((activity) => activity.role !== 'subagent')
-  const subagents = activities.filter((activity) => activity.role === 'subagent')
-  const activityRow = (activity: typeof activities[number], index: number, isSubagent: boolean) => <Row key={`${isSubagent ? 'sub' : 'main'}:${index}`} justify="between" align="center" gap="sm" wrap>
-    <Box minWidth={0} grow><Text size="sm" truncate>{(activity.label || activity.agentType || (isSubagent ? t.subagent : t.agentName)) + (activity.toolName ? ' · ' + activity.toolName : '')}</Text></Box>
-    <Badge tone={activity.state === 'working' ? 'accent' : activity.state === 'blocked' ? 'warning' : 'neutral'}>{stateNames[activity.state]}</Badge>
-  </Row>
+  const showAntigravityChildren = read(nativeEnabled) && read(antigravityChildEnabled)
+  // Each native parent is followed by its own children, including those read from the provider.
+  const agentGroups: { parent: NativeActivity; children: NativeActivity[] }[] = []
+  for (const activity of read(nativeActivities)) {
+    if (activity.role !== 'subagent') agentGroups.push({ parent: activity, children: [] })
+    else if (activity.statusSource !== 'antigravity' || showAntigravityChildren) agentGroups.at(-1)?.children.push(activity)
+  }
+  const activityRow = (activity: NativeActivity, index: number, isSubagent: boolean) => {
+    if (activity.statusSource === 'antigravity') return <Stack key={`provider-child:${index}`} gap="xs">
+      <Row justify="between" align="center" gap="sm" wrap>
+        <Text size="sm">{activity.label || t.subagent}</Text>
+        <Badge tone="neutral">{t[activity.state]}</Badge>
+      </Row>
+      <Row gap="xs" align="center" wrap>
+        <Text size="xs" muted>{'Antigravity · ' + t.lastReported}</Text>
+        {activity.statusUpdatedAt !== undefined ? <RelativeTime at={activity.statusUpdatedAt} muted /> : null}
+      </Row>
+    </Stack>
+    return <Row key={`${isSubagent ? 'sub' : 'main'}:${index}`} justify="between" align="center" gap="sm" wrap>
+      <Box minWidth={0} grow><Text size="sm" truncate>{(activity.label || activity.agentType || (isSubagent ? t.subagent : t.agentName)) + (activity.toolName ? ' · ' + activity.toolName : '')}</Text></Box>
+      <Badge tone={activity.state === 'working' ? 'accent' : activity.state === 'blocked' ? 'warning' : 'neutral'}>{t[activity.state]}</Badge>
+    </Row>
+  }
   return <Box direction="column" gap="lg">
     <Stack gap="xs">
       <Row justify="between" align="center" gap="sm" wrap>
@@ -241,14 +275,21 @@ function ActivityPanel() {
     <Stack gap="sm">
       <Heading level={2}>{t.agent}</Heading>
       {read(nativeStatus) === 'unavailable' ? <Text tone="danger">{t.unavailable}</Text> :
-        !read(nativeEnabled) ? <Text muted size="sm">{t.agentOff}</Text> : activities.length === 0 ? <Text muted size="sm">{t.agentNone}</Text> :
+        !read(nativeEnabled) ? <Text muted size="sm">{t.agentOff}</Text> : agentGroups.length === 0 ? <Text muted size="sm">{t.agentNone}</Text> :
         <Box direction="column" gap="sm" padding="md" border radius="md" background="card">
-          {mainAgents.map((activity, i) => activityRow(activity, i, false))}
-          {subagents.length > 0 ? <Stack gap="sm">
-            {mainAgents.length > 0 ? <Separator /> : null}
-            <Row justify="between" align="center" gap="sm"><Text size="sm" weight="semibold">{t.subagents}</Text><Text size="xs" muted>{String(subagents.length)}</Text></Row>
-            {subagents.map((activity, i) => activityRow(activity, i, true))}
-          </Stack> : null}
+          {agentGroups.map(({ parent, children }, i) => <Stack key={`main:${i}`} gap="xs">
+            {i ? <Separator /> : null}
+            {activityRow(parent, i, false)}
+            {parent.lastSubagentInvocationAt !== undefined ? <Row gap="xs" align="center" wrap>
+              <Text size="xs" weight="semibold">{t.subagentCall}</Text>
+              <RelativeTime at={parent.lastSubagentInvocationAt} muted />
+              <Text size="xs" muted>{t.childStatusUnreported}</Text>
+            </Row> : null}
+            {children.length > 0 ? <Box direction="column" gap="xs" padding="sm" radius="sm" background="muted">
+              <Row justify="between" align="center" gap="sm"><Text size="sm" weight="semibold">{t.subagents}</Text><Text size="xs" muted>{String(children.length)}</Text></Row>
+              {children.map((child, j) => activityRow(child, j, true))}
+            </Box> : null}
+          </Stack>)}
         </Box>}
       {read(journalStatus) === 'truncated' ? <Text muted size="xs">{t.truncated}</Text> : read(journalStatus) === 'unavailable' ? <Text muted size="xs">{t.historyUnavailable}</Text> : null}
     </Stack>
@@ -288,8 +329,10 @@ function ActivityPanel() {
     </Collapsible>
     <Collapsible title={t.settings}>
       <Stack gap="sm">
-        <Switch label={t.setting} checked={read(nativeEnabled)} onChange={changeNative} />
+        <Switch label={t.setting} checked={read(nativeEnabled)} onChange={value => changeActivitySetting('nativeActivity', value)} />
         <Text size="xs">{t.privacy}</Text>
+        <Switch label={t.antigravityChildren} checked={showAntigravityChildren} disabled={!read(nativeEnabled)} onChange={value => changeActivitySetting('antigravityChildStatus', value)} />
+        <Text size="xs">{t.antigravityPrivacy}</Text>
         <Collapsible title={t.privacyMore}><Text muted size="xs">{t.privacyDetail}</Text></Collapsible>
       </Stack>
     </Collapsible>

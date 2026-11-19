@@ -16,6 +16,12 @@ const requests = {
 }
 export default defineCheck({
   fresh: { requests },
+  antigravityChild: { settings: { nativeActivity: true, antigravityChildStatus: true }, requests: { ...requests,
+    'native.get': () => ({ status: 'ready', resources: [], activities: [
+      { agentType: 'Antigravity', state: 'done', toolName: null },
+      { agentType: 'Antigravity', role: 'subagent', state: 'idle', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000041 }
+    ] })
+  } },
   jevBadges: { settings: { nativeActivity: true }, requests: { ...requests,
     'native.get': () => ({
       status: 'ready', journalStatus: 'ready', resources: [{ category: 'plugin', name: 'design-tools', evidence: 'observed' }],

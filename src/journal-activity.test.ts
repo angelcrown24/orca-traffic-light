@@ -76,6 +76,20 @@ test('reports truncated results rather than claiming full history', async () => 
   assert.equal((await readJournalActivity(id, async () => [meta, ...rows])).status, 'truncated')
 })
 
+test('retains the root Antigravity dispatch time outside the visible calls, independent of later roster queries', async () => {
+  const base = { kind: 'call', name: 'invoke_subagent', at_ms: 1700000000000, seq: 1, idx: 0, is_root: 1, state: 'completed' }
+  const other = [
+    { name: 'manage_subagents', input: '{"Action":"list"}' }, { state: 'failed' }, { state: 'running' },
+    { is_root: 0 }, { mcp_server: 'custom', mcp_tool: 'invoke_subagent' }, { name: 'unrelated_tool' }
+  ].map(changes => ({ ...base, at_ms: base.at_ms + 5000, ...changes }))
+  const recent = Array.from({ length: 30 }, (_, i) => ({ ...base, seq: i + 2, name: 'read_file' }))
+  const read = (rows: unknown[]) => readJournalActivity(id, async () => [meta, ...rows])
+  assert.equal((await read(other)).lastSubagentInvocationAt, undefined)
+  const result = await read([...recent, ...other, base, { ...base, at_ms: base.at_ms - 1000 }])
+  assert.equal(result.lastSubagentInvocationAt, base.at_ms)
+  assert.ok(result.recentTools?.every(tool => tool.name === 'read_file'))
+})
+
 test('decodes Antigravity wrapper calls and file reads from a UUID session and omits free-form titles', async () => {
   const uuid = '12345678-abcd-4123-9123-123456789abc'
   assert.ok(journalQuery(uuid))

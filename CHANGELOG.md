@@ -1,5 +1,11 @@
 # Release history
 
+## [v0.9.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.9.0) · Follow delegated work in Antigravity chats
+
+- A new opt-in setting on macOS reads child status and its report time from the local Antigravity CLI index. This covers native Gemini chats running through Antigravity, including delegated work that continues after the parent replies.
+- Agent activity shows the last observed subagent call beneath its parent when child status is unavailable.
+- Live child agents can appear from either roster format Orca supplies. Monitoring has its own status, and background commands are excluded from the subagent count.
+
 ## [v0.8.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.8.0) · Review provider-specific sources before import
 
 - Import identifies recognized provider requirements and explains which part the shared runner cannot reproduce.

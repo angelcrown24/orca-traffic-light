@@ -4,7 +4,7 @@ import { classifyResources, nativeToolName, type ResourceObservation } from './r
 
 /** Internal Orca journal schema and privacy boundary: no raw inputs leave this module. */
 export type JournalToolCall = { id: string; name: string; observedAt: number; state: 'running' | 'completed' | 'failed' | 'unknown' }
-export type JournalResult = { recentTools?: JournalToolCall[]; status: 'ready' | 'unavailable' | 'truncated'; resources: ResourceObservation[]; activeResources?: ResourceObservation[] }
+export type JournalResult = { recentTools?: JournalToolCall[]; lastSubagentInvocationAt?: number; status: 'ready' | 'unavailable' | 'truncated'; resources: ResourceObservation[]; activeResources?: ResourceObservation[] }
 type Query = (sql: string) => Promise<unknown>
 const MAX_CALLS = 300
 
@@ -34,7 +34,8 @@ export function journalQuery(sessionId: string): string | null {
   SELECT 'call', NULL, NULL, substr(json_extract(payload_json,'$.body.name'),1,256),
     -- Prefer a single structured read path or command. Truncating an entire JSON
     -- object mid-string otherwise drops valid skill references from long previews.
-    CASE WHEN json_type(payload_json,'$.body.input')='object' AND lower(json_extract(payload_json,'$.body.name')) IN
+    CASE WHEN json_extract(payload_json,'$.body.name') IN ('invoke_subagent','manage_subagents') THEN NULL
+      WHEN json_type(payload_json,'$.body.input')='object' AND lower(json_extract(payload_json,'$.body.name')) IN
       ('bash','shell','execute','terminal','run_command','run_shell_command','exec_command','functions.exec_command','functions/exec_command')
       THEN substr(coalesce(json_extract(payload_json,'$.body.input.command'),json_extract(payload_json,'$.body.input.cmd'),
         json_extract(payload_json,'$.body.input.CommandLine'),json_extract(payload_json,'$.body.input.command_line')),1,8192)
@@ -78,11 +79,18 @@ export async function readJournalActivity(sessionId: string, query: Query = quer
     const activeSeen = new Set<string>()
     const activeResources: ResourceObservation[] = []
     const recentTools: JournalToolCall[] = []
+    let lastSubagentInvocationAt = 0
     for (const item of calls.slice(0, MAX_CALLS)) {
       const owner = item.is_root === 1 || (item.is_root === 0 && typeof item.producer === 'string' && workingChildren.has(item.producer))
       const active = item.active === 1 && owner
       const identity = { server: item.mcp_server, tool: item.mcp_tool }
       const name = nativeToolName(item.name, item.input, identity)
+      // Antigravity records dispatch and roster queries as separate calls. Only a
+      // root dispatch is evidence of delegation. Its return says nothing about the child.
+      if (item.name === 'invoke_subagent' && item.is_root === 1 && item.state === 'completed' &&
+          identity.server == null && identity.tool == null && Number.isSafeInteger(item.at_ms) && item.at_ms > lastSubagentInvocationAt) {
+        lastSubagentInvocationAt = item.at_ms
+      }
       if (recentTools.length < 30 && name && Number.isSafeInteger(item.seq) && Number.isSafeInteger(item.idx) && Number.isSafeInteger(item.at_ms) && item.at_ms > 0) {
         const state = item.state === 'completed' || item.state === 'failed' ? item.state : item.state === 'running' && active ? 'running' : 'unknown'
         recentTools.push({ id: sessionId + ':' + item.seq + ':' + item.idx, name, observedAt: item.at_ms, state })
@@ -93,6 +101,7 @@ export async function readJournalActivity(sessionId: string, query: Query = quer
         if (active && !activeSeen.has(key)) { activeSeen.add(key); activeResources.push(resource) }
       }
     }
-    return { status: calls.length > MAX_CALLS ? 'truncated' : 'ready', resources, activeResources, ...(recentTools.length ? { recentTools } : {}) }
+    return { status: calls.length > MAX_CALLS ? 'truncated' : 'ready', resources, activeResources,
+      ...(lastSubagentInvocationAt ? { lastSubagentInvocationAt } : {}), ...(recentTools.length ? { recentTools } : {}) }
   } catch { return { status: 'unavailable', resources: [] } }
 }

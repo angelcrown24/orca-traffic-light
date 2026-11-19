@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { parseNativeActivity, parseNativeResources, parseNativeActiveResources, nativeJournalSessions, missingFromPartialSnapshot, nativeWorkingChildIds, type NativeActivity } from './native-activity'
+import { antigravityChildSessionIds, parseNativeActivity, parseNativeResources, parseNativeActiveResources, nativeJournalSessions, missingFromPartialSnapshot, nativeWorkingChildIds, type NativeActivity, type ProviderChildStatus } from './native-activity'
 import type { ResourceObservation } from './resource-classifier'
 import { readJournalActivity, type JournalResult, type JournalToolCall } from './journal-activity'
 
@@ -8,6 +8,10 @@ export type NativeResult = { recentTools?: NativeToolCall[]; status: 'disabled' 
 type FetchSnapshot = () => Promise<unknown>
 type GetEnabled = () => Promise<boolean>
 type GetWorkspace = () => Promise<string | null>
+type ChildStatusReader = {
+  enabled: GetEnabled
+  read: (workspaceId: string, sessionIds: string[]) => Promise<ReadonlyMap<string, readonly ProviderChildStatus[]>>
+}
 
 /** Resolve a single executable; never interpret an override as a shell command. */
 export function resolveOrcaCli(platform: string, override?: string): string | null {
@@ -38,7 +42,9 @@ export function fetchSnapshot(): Promise<unknown> {
 }
 
 /** Requests are deduplicated and never issued until the setting is explicitly true. */
-export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace, fetch: FetchSnapshot, journal: (sessionId: string, children: ReadonlySet<string>) => Promise<JournalResult> = (id, children) => readJournalActivity(id, undefined, children)) {
+export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace, fetch: FetchSnapshot,
+  journal: (sessionId: string, children: ReadonlySet<string>) => Promise<JournalResult> = (id, children) => readJournalActivity(id, undefined, children),
+  childStatus?: ChildStatusReader) {
   let inFlight: Promise<NativeResult> | null = null
   let workspaceId: string | null = null
   let epoch = 0
@@ -62,7 +68,17 @@ export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace,
         if (missingFromPartialSnapshot(snapshot, id)) return empty('unavailable')
         const { sessions, truncated } = nativeJournalSessions(snapshot, id)
         const children = nativeWorkingChildIds(snapshot, id)
-        const journals = await Promise.all(sessions.map(s => journal(s.id, children.get(s.id) ?? new Set())))
+        const lookupChildren = async () => {
+          if (!childStatus) return undefined
+          const ids = antigravityChildSessionIds(snapshot, id)
+          if (!ids.length || !(await childStatus.enabled()) || epoch !== requestEpoch || (await workspace()) !== id) return undefined
+          return childStatus.read(id, ids)
+        }
+        const [journals, providerChildren] = await Promise.all([
+          Promise.all(sessions.map(s => journal(s.id, children.get(s.id) ?? new Set()))),
+          lookupChildren().catch(() => undefined)
+        ])
+        const visibleChildren = providerChildren && await childStatus?.enabled().catch(() => false) ? providerChildren : undefined
         if (epoch !== requestEpoch || !(await enabled()) || (await workspace()) !== id) {
           clear()
           return empty('disabled')
@@ -79,8 +95,11 @@ export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace,
         const remaining = callsBySession.flatMap(calls => calls.slice(1)).sort(newestFirst)
         const recentTools = latestPerSession.concat(remaining.slice(0, 30 - latestPerSession.length)).sort(newestFirst)
         const active = new Map<string, ResourceObservation>()
+        const invocations = new Map<string, number>()
         const currentResources = parseNativeActiveResources(snapshot, id)
         for (let i = 0; i < journals.length; i++) {
+          const at = journals[i].lastSubagentInvocationAt
+          if (sessions[i].agentType?.toLowerCase() === 'antigravity' && at) invocations.set(sessions[i].id, at)
           if (sessions[i].working) currentResources.push(...(journals[i].activeResources ?? []))
         }
         for (const resource of currentResources) {
@@ -94,7 +113,7 @@ export function createNativeReader(enabled: GetEnabled, workspace: GetWorkspace,
           if (!previous || resource.evidence === 'observed') observed.set(key, resource)
         }
         while (observed.size > 100) observed.delete(observed.keys().next().value!)
-        return { status: 'ready', ...(recentTools.length ? { recentTools } : {}), activities: parseNativeActivity(snapshot, id), resources: [...observed.values()], activeResources: [...active.values()].slice(-100), ...(journalStatus ? { journalStatus } : {}) }
+        return { status: 'ready', ...(recentTools.length ? { recentTools } : {}), activities: parseNativeActivity(snapshot, id, invocations, visibleChildren), resources: [...observed.values()], activeResources: [...active.values()].slice(-100), ...(journalStatus ? { journalStatus } : {}) }
       } catch { return empty('unavailable') }
     })()
     try { return await inFlight } finally { inFlight = null }

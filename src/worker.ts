@@ -1,5 +1,6 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { Call } from './protocol'
+import { readAntigravityChildren } from './antigravity-children'
 import { createNativeReader, fetchSnapshot } from './native-reader'
 import { classifyResources, directJevCommand, type ResourceObservation } from './resource-classifier'
 import { createToolboxManager } from '../runtime/toolbox-manager.mjs'
@@ -103,9 +104,12 @@ export default function activate(orca: OrcaWorkerApi): void {
   const nativeRead = createNativeReader(
     async () => (await orca.settings.get('nativeActivity')) === true,
     async () => (await orca.host.call('workspace.readContext'))?.workspaceId ?? null,
-    fetchSnapshot
+    fetchSnapshot, undefined, {
+      enabled: async () => process.platform === 'darwin' && (await orca.settings.get('antigravityChildStatus')) === true,
+      read: readAntigravityChildren
+    }
   )
-  orca.settings.onDidChange(({ key }) => { if (key === 'nativeActivity') nativeRead.clear() })
+  orca.settings.onDidChange(({ key }) => { if (key === 'nativeActivity' || key === 'antigravityChildStatus') nativeRead.clear() })
   orca.panels.handle('native.get', nativeRead)
   orca.panels.handle('calls.get', async () => {
     const context = await orca.host.call('workspace.readContext')

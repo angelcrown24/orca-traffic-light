@@ -51,6 +51,67 @@ test('native activity is off by default and only requested after explicit opt-in
   } finally { await view.unmount() }
 })
 
+test('Antigravity status requires a separate opt-in and identifies the time and source of the last report', async () => {
+  const at = 1700000000000
+  let requests = 0
+  const host = mockHost({ requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => {
+      requests++
+      return { status: 'ready', resources: [], activities: [
+        { agentType: 'antigravity', state: 'done', toolName: null },
+        { agentType: 'antigravity', role: 'subagent', state: 'working', toolName: null, statusSource: 'antigravity', statusUpdatedAt: at }
+      ] }
+    }
+  } })
+  const view = await mount(panel, { host })
+  try {
+    const childSetting = { label: 'Show Antigravity subagent status' }
+    await view.toggle({ label: 'Settings & privacy' })
+    assert.equal(view.find(childSetting)?.disabled, true)
+    assert.equal(requests, 0)
+    await view.toggle({ label: 'Show chat activity' })
+    assert.equal(view.find(childSetting)?.disabled, false)
+    assert.equal(view.valueOf(childSetting), false)
+    assert.equal(view.find({ text: 'Subagents' }), null)
+    const initialRequests = requests
+    await view.toggle(childSetting)
+    assert.ok(requests > initialRequests)
+    assert.equal(host.data().settings.antigravityChildStatus, true)
+    assert.ok(view.find({ text: 'Antigravity · Last reported' }))
+    assert.ok(view.find({ type: 'Badge', text: 'Done' }))
+    assert.equal(view.find({ type: 'Badge', text: 'Working' })?.props.tone, 'neutral')
+    assert.equal(view.find({ type: 'RelativeTime' })?.props.at, at)
+    await view.toggle(childSetting)
+    assert.equal(view.find({ text: 'Subagents' }), null)
+    assert.equal(view.find({ text: 'Antigravity · Last reported' }), null)
+    assert.equal(host.data().settings.nativeActivity, true)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('shows the localized idle report independently of a completed parent', async () => {
+  const host = mockHost({ settings: { nativeActivity: true, antigravityChildStatus: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [
+      { agentType: 'antigravity', state: 'done', toolName: null },
+      { agentType: 'antigravity', role: 'subagent', state: 'idle', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000000 }
+    ] })
+  } })
+  const view = await mount(panel, { host, locale: 'ko-KR' })
+  try {
+    assert.ok(view.find({ type: 'Badge', text: '완료' }))
+    assert.ok(view.find({ type: 'Badge', text: '대기' }))
+    assert.ok(view.find({ text: 'Antigravity · 마지막 보고' }))
+    await view.toggle({ label: '설정 및 개인정보' })
+    await view.toggle({ label: '채팅 활동 표시' })
+    assert.equal(view.find({ text: 'Antigravity · 마지막 보고' }), null)
+    assert.equal(view.find({ label: 'Antigravity 서브에이전트 상태 표시' })?.disabled, true)
+    assert.equal(host.data().settings.antigravityChildStatus, true)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
 test('shows live subagents separately and removes them when they are no longer reported', async () => {
   let hasSubagents = true
   const host = mockHost({ settings: { nativeActivity: true }, requests: {
@@ -59,6 +120,7 @@ test('shows live subagents separately and removes them when they are no longer r
       { agentType: 'codex', state: 'working', toolName: null },
       ...(hasSubagents ? [
         { role: 'subagent' as const, label: 'review', agentType: 'codex', state: 'working' as const, toolName: null },
+        { role: 'subagent' as const, label: 'watch', agentType: 'codex', state: 'monitoring' as const, toolName: null },
         { role: 'subagent' as const, label: 'audit', agentType: 'codex', state: 'unverifiable' as const, toolName: null }
       ] : [])
     ] })
@@ -69,6 +131,8 @@ test('shows live subagents separately and removes them when they are no longer r
     assert.equal(Boolean(view.find({ text: '서브에이전트' })), true)
     assert.equal(Boolean(view.find({ text: 'review' })), true)
     assert.equal(Boolean(view.find({ text: 'audit' })), true)
+    assert.ok(view.find({ text: '모니터링 중' }))
+    assert.equal(view.find({ text: '실행 상태 미확인' }), null)
     assert.equal(Boolean(view.find({ text: '확인 불가' })), true)
     hasSubagents = false
     await view.emit('workspace.changed', { context: null })
@@ -79,6 +143,57 @@ test('shows live subagents separately and removes them when they are no longer r
   } finally { await view.unmount() }
 })
 
+test('keeps each child under its own native chat when two parents have the same provider', async () => {
+  const host = mockHost({ settings: { nativeActivity: true, antigravityChildStatus: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [
+      { agentType: 'Antigravity', state: 'done', toolName: null },
+      { agentType: 'Antigravity', role: 'subagent', state: 'idle', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000000 },
+      { agentType: 'Antigravity', state: 'working', toolName: 'Read' },
+      { agentType: 'Antigravity', role: 'subagent', state: 'monitoring', toolName: null, label: 'review' }
+    ] })
+  } })
+  const view = await mount(panel, { host })
+  try {
+    const first = view.find({ type: 'Stack', text: /^Antigravity Done Subagents 1 / })
+    assert.ok(first?.text.includes('Antigravity · Last reported'))
+    assert.equal(first?.text.includes('review'), false)
+    const second = view.find({ type: 'Stack', text: /^Antigravity · Read Working Subagents 1 / })
+    assert.ok(second?.text.includes('review Monitoring'))
+    assert.equal(second?.text.includes('Last reported'), false)
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+for (const [locale, call, status] of [
+  ['en-US', 'Subagent call', 'Live status unavailable'],
+  ['ko-KR', '서브에이전트 호출', '실행 상태 미확인']
+]) {
+  test(`shows the timestamp of a delegation under its reporting parent without implying live work (${locale})`, async () => {
+    const at = 1700000000000
+    let observed = true
+    const host = mockHost({ settings: { nativeActivity: true }, requests: {
+      'calls.get': () => ({ workspace: true, calls: [] }),
+      'native.get': () => ({ status: 'ready', resources: [], activities: [
+        { agentType: 'codex', toolName: null, state: 'done' },
+        { agentType: 'antigravity', toolName: null, state: 'done', ...(observed ? { lastSubagentInvocationAt: at } : {}) }
+      ] })
+    } })
+    const view = await mount(panel, { host, locale })
+    try {
+      assert.ok(view.find({ type: 'Stack', text: new RegExp('^antigravity .*' + call) }))
+      assert.equal(view.findAll({ type: 'Text', text: call }).length, 1)
+      assert.ok(view.find({ text: status }))
+      assert.equal(view.find({ type: 'RelativeTime' })?.props.at, at)
+      assert.equal(view.find({ text: /^(Working|작업 중|In use|현재 사용 중|Subagents|서브에이전트)$/ }), null)
+      observed = false
+      await view.emit('workspace.changed', { context: null })
+      assert.equal(view.find({ text: call }), null)
+      assert.equal(view.find({ type: 'RelativeTime' }), null)
+      assert.deepEqual(view.errors, [])
+    } finally { await view.unmount() }
+  })
+}
 
 test('does not request native activity while the panel is hidden', async () => {
   let requests = 0

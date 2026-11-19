@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { parseNativeActivity, parseNativeResources, nativeWorkingChildIds } from './native-activity'
+import { parseNativeActivity, parseNativeResources, nativeWorkingChildIds, antigravityChildSessionIds, type ProviderChildStatus } from './native-activity'
 
 test('identifies only live working child provider IDs in the exact local workspace', () => {
   const sid = 'codex_12345678_abcd_1234_abcd_123456789abc'
@@ -72,6 +72,91 @@ test('reports bounded subagent state only for the matching workspace without pri
 test('marks child status unverifiable when its parent observation is stale', () => {
   const response = { result: { worktrees: [{ worktreeId: 'one', agents: [{ agentType: 'codex', state: 'working', subagentObservation: 'unverifiable', children: [{ id: 'child', membership: 'live', state: 'working' }] }] }] } }
   assert.equal(parseNativeActivity(response, 'one')[1].state, 'unverifiable')
+})
+
+test('legacy subagent rows follow host freshness and never override the canonical roster', () => {
+  const id = '12345678-abcd-4123-9123-123456789abc'
+  const parent = { state: 'working', agentType: 'antigravity', paneKey: 'structured-agent-session-' + id + ':pane',
+    structuredHostOwned: true, subagentObservation: 'live', subagents: [
+      { id: 'worker-1', state: 'working', startedAt: 1, description: 'Private free-form task' },
+      { id: 'bad-time', state: 'working' }, { id: 'bad-state', state: 'bogus', startedAt: 1 }
+    ] }
+  const snapshot = (extra: Record<string, unknown>) => ({ result: { worktrees: [{ worktreeId: 'one', hostId: 'local', agents: [{ ...parent, ...extra }] }] } })
+  const expected = { agentType: 'antigravity', state: 'working', toolName: null, role: 'subagent' }
+  assert.deepEqual(parseNativeActivity(snapshot({}), 'one').slice(1), [expected])
+  assert.deepEqual([...nativeWorkingChildIds(snapshot({}), 'one').get(id)!], ['worker-1'])
+  assert.deepEqual(parseNativeActivity(snapshot({ subagentObservation: 'unverifiable' }), 'one').slice(1), [{ ...expected, state: 'unverifiable' }])
+  assert.equal(nativeWorkingChildIds(snapshot({ subagentObservation: 'unverifiable' }), 'one').size, 0)
+  for (const children of [[], null, [{ id: 'cmd', providerId: 'shell', kind: 'command', membership: 'live', state: 'working' }]]) {
+    assert.deepEqual(parseNativeActivity(snapshot({ children }), 'one').slice(1), [])
+    assert.deepEqual([...nativeWorkingChildIds(snapshot({ children }), 'one').get(id)!], [])
+  }
+  const monitoring = [{ id: 'agent', providerId: 'monitoring-agent', kind: 'agent', state: 'monitoring', membership: 'live' }]
+  assert.deepEqual(parseNativeActivity(snapshot({ children: monitoring }), 'one').slice(1), [{ ...expected, state: 'monitoring' }])
+  assert.deepEqual([...nativeWorkingChildIds(snapshot({ children: monitoring }), 'one').get(id)!], [])
+})
+
+test('attaches a delegation timestamp only to its exact local parent without visible child rows', () => {
+  const [a, b] = ['12345678-abcd-4123-9123-123456789ab1', '12345678-abcd-4123-9123-123456789ab2']
+  const parent = (id: string) => ({ agentType: 'antigravity', state: 'done', orcaSessionId: id, paneKey: 'structured-agent-session-' + id + ':pane' })
+  const agents = [parent(a), { ...parent(b), children: [{ id: 'a', kind: 'agent', membership: 'live', state: 'working' }], subagentObservation: 'live' },
+    { ...parent(a), orcaSessionId: b }]
+  const snapshot = (hostId: string) => ({ result: { worktrees: [{ worktreeId: 'one', hostId, agents }] } })
+  const times = new Map([[a, 1], [b, 2]])
+  const timestamps = (hostId: string, workspace: string) => parseNativeActivity(snapshot(hostId), workspace, times).map(row => row.lastSubagentInvocationAt)
+  assert.deepEqual(timestamps('local', 'one'), [1, undefined, undefined, undefined])
+  assert.deepEqual(timestamps('remote', 'one'), [undefined, undefined, undefined, undefined])
+  assert.deepEqual(timestamps('local', 'other'), [])
+})
+
+test('provider evidence fills a verified Antigravity parent with no host agent rows', () => {
+  const id = '12345678-abcd-4123-9123-123456789abc'
+  const parent = { state: 'working', agentType: 'antigravity', orcaSessionId: id,
+    paneKey: 'structured-agent-session-' + id + ':pane', structuredHostOwned: true }
+  const hostChild = { id: 'job', kind: 'command', state: 'working', membership: 'live' }
+  const snapshot = (extra: Record<string, unknown>) => ({ result: { worktrees: [{ worktreeId: 'one', hostId: 'local', agents: [{ ...parent, ...extra }] }] } })
+  const dispatch = new Map([[id, 20]])
+  const statuses: ProviderChildStatus[] = [{ state: 'working', updatedAt: 21 }, { state: 'idle', updatedAt: 22 }, { state: 'unverifiable', updatedAt: 23 }]
+  const provider = new Map([[id, statuses]])
+  for (const roster of [{}, { children: [] }, { children: [hostChild] }]) {
+    const data = snapshot(roster)
+    assert.deepEqual(antigravityChildSessionIds(data, 'one'), [id])
+    const rows = parseNativeActivity(data, 'one', dispatch, provider)
+    assert.deepEqual(rows.slice(1), statuses.map(status => ({
+      agentType: 'antigravity', role: 'subagent', toolName: null, state: status.state,
+      statusSource: 'antigravity', statusUpdatedAt: status.updatedAt
+    })))
+    assert.equal(rows[0].lastSubagentInvocationAt, undefined)
+    assert.equal(nativeWorkingChildIds(data, 'one').size, 0)
+    assert.deepEqual(antigravityChildSessionIds(data, 'other'), [])
+  }
+  for (const extra of [{ children: null }, { children: [null] }, { children: [{ ...hostChild, kind: 'unknown' }] },
+    { children: [{ ...hostChild, children: [{ ...hostChild, kind: 'agent' }] }] }, { children: [{ ...hostChild, kind: 'agent' }], subagentObservation: 'live' },
+    { subagents: [{}] }, { agentType: 'gemini' }, { structuredHostOwned: false }]) {
+    const data = snapshot(extra)
+    assert.deepEqual(antigravityChildSessionIds(data, 'one'), [])
+    assert.equal(parseNativeActivity(data, 'one', dispatch, provider).some(row => row.statusSource), false)
+  }
+  const invalid = new Map([[id, [{ state: 'working', updatedAt: NaN } as ProviderChildStatus]]])
+  assert.equal(parseNativeActivity(snapshot({}), 'one', dispatch, invalid)[0].lastSubagentInvocationAt, 20)
+  const bounded = new Map([[id, Array.from({ length: 51 }, () => statuses[0])]])
+  assert.equal(parseNativeActivity(snapshot({}), 'one', dispatch, bounded).length, 51)
+})
+
+test('looks up provider observations only for a unique pane in a sampled local workspace', () => {
+  const ids = Array.from({ length: 6 }, (_, i) => '12345678-abcd-4123-9123-123456789ab' + i)
+  const [a,b] = ids
+  const agent = (id: string, updatedAt = 0) => ({ state: 'done', agentType: 'antigravity',
+    orcaSessionId: id, paneKey: 'structured-agent-session-' + id + ':pane', updatedAt })
+  const row = (worktreeId: string, hostId: string, agents: ReturnType<typeof agent>[]) => ({ worktreeId, hostId, agents })
+  const lookup = (rows: ReturnType<typeof row>[]) => antigravityChildSessionIds({ result: { worktrees: rows } }, 'one')
+  assert.deepEqual(lookup([row('one', 'remote', [agent(a)])]), [])
+  assert.deepEqual(lookup([row('one', 'local', [agent(a), agent(a), agent(b)])]), [b])
+  assert.deepEqual(lookup([row('one', 'local', [agent(a)]), row('other', 'local', [agent(a)])]), [])
+  assert.deepEqual(lookup([row('one', 'local', ids.map(agent))]).sort(), ids.slice(2))
+  const duplicate = { result: { worktrees: [row('one','local',[agent(a),agent(a)])] } }
+  const records = new Map([[a, [{ state: 'working' as const, updatedAt: 2 }]]])
+  assert.deepEqual(parseNativeActivity(duplicate, 'one', new Map([[a, 1]]), records).map(parent => parent.lastSubagentInvocationAt), [undefined, undefined])
 })
 
 test('does not present non-live or unknown child membership as working', () => {

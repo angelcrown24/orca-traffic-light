@@ -35,6 +35,8 @@ Open **Activity** in the workspace you want to follow. Calls from local agent te
 | **Jev** | The shared runner linked this skill read or MCP call to a Jev recommendation in the same conversation. |
 | **Agent activity** | The agent’s reported state, plus subagents when Orca supplies them. |
 
+For a Gemini chat running through Antigravity, a parent turn can finish while a delegated task continues. On macOS, enable **Show chat activity** and **Show Antigravity subagent status** under **Settings & privacy** to see each child’s reported state and time. When only a delegation call is visible, the panel shows **Subagent call** with its timestamp and **Live status unavailable**. Open Activity in the workspace that contains the conversation. Two Orca workspaces can use the same project folder. [Example showing a completed parent and an idle child](docs/images/antigravity-status-en.png)
+
 <a href="docs/images/activity-en.png"><img src="docs/images/activity-en.png" width="390" alt="English Activity tab showing detected skills, inline Jev and In use badges, and agent activity"></a>
 
 ## Share a skill or MCP tool

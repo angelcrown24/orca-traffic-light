@@ -177,3 +177,52 @@ test('retains the latest native call from a quiet session while filling the rest
   assert.deepEqual(tools.map(t => t.observedAt), [...Array.from({ length: 29 }, (_, i) => 129 - i), 2])
   assert.equal(tools[29].agentType, 'antigravity')
 })
+
+test('binds a Neon invocation to its exact conversation and provider', async () => {
+  const first = '10000000-abcd-4123-9123-123456789abc'
+  const other = '20000000-abcd-4123-9123-123456789abc'
+  const codex = '30000000-abcd-4123-9123-123456789abc'
+  const agents = [first, other, codex].map(id => ({ paneKey: 'structured-agent-session-' + id + ':pane',
+    orcaSessionId: id, state: 'done', agentType: id === codex ? 'codex' : 'antigravity', children: [] }))
+  const read = createNativeReader(async () => true, async () => 'one', async () => ({
+    result: { worktrees: [{ worktreeId: 'one', hostId: 'local', agents }] }
+  }), async id => ({ status: 'ready', resources: [], ...(id === other ? {} : { lastSubagentInvocationAt: 1700000000000 }) }))
+  const result = await read()
+  assert.deepEqual(result.activities.map(item => item.lastSubagentInvocationAt), [1700000000000, undefined, undefined])
+  assert.ok(result.activities.every(item => item.state === 'done' && !item.role))
+})
+
+test('Antigravity lookup needs separate consent, preserves the journal on failure and discards results after opt-out', async () => {
+  const id = '10000000-abcd-4123-9123-123456789abc'
+  const parent = { paneKey: 'structured-agent-session-' + id + ':pane', orcaSessionId: id,
+    state: 'done', agentType: 'antigravity', children: [], subagentObservation: 'live' }
+  const snapshot = async () => ({ result: { worktrees: [{ worktreeId: 'one', hostId: 'local', agents: [parent] }] } })
+  let allow = false
+  let mode = 'read'
+  let count = 0
+  const at = Date.now()
+  const read = createNativeReader(async () => true, async () => 'one', snapshot,
+    async () => ({ status: 'ready', resources: [], lastSubagentInvocationAt: at - 5000 }), {
+      enabled: async () => allow,
+      read: async (workspace, ids) => {
+        count++
+        assert.equal(workspace, 'one')
+        assert.deepEqual(ids, [id])
+        if (mode === 'fail') throw Error('Unusable index')
+        if (mode === 'revoke') allow = false
+        return new Map([[id, [{ state: 'idle' as const, updatedAt: at }]]])
+      }
+    })
+  const fallback = (await read()).activities
+  assert.equal(count, 0)
+  assert.equal(fallback[0].lastSubagentInvocationAt, at - 5000)
+  allow = true
+  const activeLookup = await read()
+  assert.equal(count, 1)
+  assert.deepEqual(activeLookup.activities.map(a => [a.state, a.statusSource]), [['done', undefined], ['idle', 'antigravity']])
+  assert.equal(activeLookup.activities[0].lastSubagentInvocationAt, undefined)
+  mode = 'fail'
+  assert.deepEqual((await read()).activities, fallback)
+  mode = 'revoke'
+  assert.deepEqual((await read()).activities, fallback)
+})

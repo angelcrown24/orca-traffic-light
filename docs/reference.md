@@ -73,6 +73,10 @@ On macOS the reader also queries Orca’s local chat journal for the focused wor
 
 The default CLI is `orca` on macOS and `orca-ide` on Linux. On Windows, or for a different installation, set `ORCA_CLI_COMMAND` to the path of a single executable. The status command has a five-second timeout and a four-megabyte output limit.
 
+The Activity panel follows the exact Orca workspace instance. In Antigravity chats, including those using Gemini, the parent turn and its delegated work can finish at different times. The panel uses child states supplied by Orca first. A separate opt-in on macOS can supplement a missing roster using Antigravity CLI’s local conversation summary index in the default `~/.gemini` account. The worker verifies the workspace, account, and native conversation handle. It reads up to 12 direct children per sampled conversation from the past 24 hours. It does not open per-conversation transcripts. A working report older than two minutes appears as unverified. Idle is the provider’s reported state and does not establish task success.
+
+When only the local journal’s completed root `invoke_subagent` call is available, the parent row shows the last call time and **Live status unavailable**. A `manage_subagents` list request does not create or renew that timestamp.
+
 Detection uses call metadata and skill-path references. A detected path shows that a skill was referenced. A completed skill read shows that its instructions reached the caller. Neither establishes how long a model followed the instructions. Brief activity can fall between samples. Native failure reporting depends on the provider. The panel does not measure model context usage or token costs.
 
 ## Permissions and local data
