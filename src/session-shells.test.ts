@@ -145,7 +145,7 @@ test('a managed PTY must be local, connected and owned by the selected workspace
     { kind: 'shell', state: 'running', name: 'git' }
   ])
   assert.equal(JSON.stringify(r).includes('PRIVATE'), false)
-  assert.deepEqual(r.tree?.map(n => [n.kind, n.state, n.children.map(c => [c.kind, c.name])]), [['terminal', 'connected', [['shell', 'git']]]])
+  assert.deepEqual(r.tree?.map(n => [n.kind, n.state, n.children.map(c => [c.kind, c.toolName, c.name])]), [['terminal', 'connected', [['shell', 'Bash', 'git']]]])
   for (const changes of [
     { executionHostId: 'remote' },
     { worktreeId: 'other' },
@@ -216,7 +216,9 @@ test('SQLite limits running shell metadata to the selected root active turn; inc
       ['git', 100]
     ]
   )
-  assert.equal(new Set(r.tree?.map(n => n.id)).size, 3)
+  assert.equal(new Set(r.tree?.map(n => n.id)).size, 5)
+  assert.deepEqual(r.tree?.filter(n => n.kind === 'tool').map(n => n.toolName), ['execute','test/private'])
+  assert.deepEqual(r.turnTools, [{ name: 'shell', count: 1, state: 'completed' }])
   assert.equal(JSON.stringify(r).includes('SECRET'), false)
   const foreign = { result: { worktrees: [{ worktreeId: "other's workspace", hostId: 'local', address: { worktree: ctx.workspaceId }, agents: [agent] }] } }
   assert.deepEqual((await readSessionShells(ctx, foreign, id, { journal })).rows, [])
@@ -331,11 +333,11 @@ test('Neon shows the open main turn, finished-call totals, and only live edit or
   const data = [
     call('shell', 'execute', { command: 'python3 PRIVATE.py' }, 'running', 210),
     call('edit', 'edit_file', { command: 42, file: 'PRIVATE', edits: ['PRIVATE'] }, 'running', 220),
-    call('mcp', 'execute', { command: 'npm PRIVATE', ServerName: 'PRIVATE', ToolName: 'edit_file' }, 'completed', 130),
+    call('mcp', 'execute', { command: 'npm PRIVATE', ServerName: 'fixture-server', ToolName: 'edit_file' }, 'completed', 130),
     call('read', 'read_file', { file: 'PRIVATE' }, 'completed', 140),
     call('old-edit', 'write_file', {}, 'completed', 150),
     call('not-shell', 'execute', { command: { text: 'PRIVATE' } }, 'running', 155),
-    call('mcp-edit', 'edit_file', { ServerName: 'PRIVATE', ToolName: 'PRIVATE' }, 'running', 158),
+    call('mcp-edit', 'edit_file', { ServerName: 'PRIVATE/unsafe path', ToolName: 'PRIVATE input' }, 'running', 158),
     `INSERT INTO journal_items VALUES
       ('${sid}',1,0,1,'diff',0,151,0,0,'d',NULL,'turn','{}'),
       ('${sid}',1,0,1,'diff',0,152,0,0,'d2',NULL,'turn','{}'),
@@ -354,14 +356,17 @@ test('Neon shows the open main turn, finished-call totals, and only live edit or
   const open = await read()
   assert.equal(open.mainWorking, true)
   assert.deepEqual(open.turnActivity, { tools: 7, commands: 1, edits: 2 })
-  assert.deepEqual(open.tree?.map(n => [n.kind, n.name ?? null]), [['edit', null], ['shell', 'python3']])
+  assert.deepEqual(open.tree?.map(n => [n.kind, n.name ?? null, n.toolName ?? null]), [
+    ['edit', null, 'edit_file'], ['shell', 'python3', 'execute'], ['tool', null, null], ['tool', null, 'execute']
+  ])
+  assert.deepEqual(open.turnTools?.map(t=>t.name), ['write_file','read_file','fixture-server/edit_file'])
   assert.equal(JSON.stringify(open).includes('PRIVATE'), false)
   const shellFinished = "UPDATE journal_items SET lifecycle_state='completed' WHERE item_id='shell';"
   const editOnly = await read(shellFinished)
-  assert.deepEqual(editOnly.tree?.map(n => n.kind), ['edit'])
+  assert.deepEqual(editOnly.tree?.map(n => n.kind), ['edit','tool','tool'])
   const newShell = await read(shellFinished, { updatedAt: 230 })
-  assert.deepEqual(newShell.tree?.map(n => n.kind), ['edit', 'shell'])
-  const finish = "UPDATE journal_items SET lifecycle_state='completed' WHERE item_id IN ('shell','edit');"
+  assert.deepEqual(newShell.tree?.map(n => n.kind), ['edit','tool','tool','shell'])
+  const finish = "UPDATE journal_items SET lifecycle_state='completed' WHERE item_id IN ('shell','edit','mcp-edit','not-shell');"
   const between = await read(finish)
   assert.equal(between.mainWorking, true)
   assert.deepEqual(between.turnActivity, open.turnActivity)

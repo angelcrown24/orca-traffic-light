@@ -155,7 +155,7 @@ export function setup(ctx: PanelContext): void {
 const labels = {
   en: {
     workspace: 'This workspace', chatError: 'Chat activity unavailable',
-    detected: 'Detected items', detectedHelp: 'Observed in tool calls, skill file paths and the shared runner. In use marks a running request or an ongoing agent turn.',
+    detected: 'Skills, plugins & MCP', detectedHelp: 'Observed in tool calls, skill file paths and the shared runner. In use marks a running request or an ongoing agent turn.',
     skill: 'Skill', plugin: 'Plugin', mcp: 'MCP server', none: 'No skills, MCP servers or plugins detected yet.', inUse: 'In use',
     previous: 'Previous items', next: 'Next items',
     antigravityChildren: 'Show Antigravity subagent status',
@@ -169,7 +169,7 @@ const labels = {
   },
   ko: {
     workspace: '현재 작업공간', chatError: '채팅 활동을 확인할 수 없습니다.',
-    detected: '감지된 항목', detectedHelp: '도구 호출, 스킬 파일 경로, 공용 실행기에서 감지한 항목입니다. 현재 사용 중은 요청이나 에이전트 작업이 진행 중일 때 표시됩니다.',
+    detected: '스킬 · 플러그인 · MCP', detectedHelp: '도구 호출, 스킬 파일 경로, 공용 실행기에서 감지한 항목입니다. 현재 사용 중은 요청이나 에이전트 작업이 진행 중일 때 표시됩니다.',
     skill: '스킬', plugin: '플러그인', mcp: 'MCP 서버', none: '아직 감지된 스킬, MCP 서버, 플러그인이 없습니다.', inUse: '현재 사용 중',
     previous: '이전 항목', next: '다음 항목',
     antigravityChildren: 'Antigravity 서브에이전트 상태 표시',

@@ -1,5 +1,5 @@
 import type { TreeItem } from 'orca'
-import type { SessionWorkNode } from './session-shells'
+import type { SessionShells, SessionWorkNode } from './session-shells'
 import { assert, mockHost, mount, test, type TestPanel } from 'orca/testing'
 import * as panel from './panel'
 
@@ -143,6 +143,60 @@ test('shows a working Antigravity chat even without child events and clears its 
     assert.equal(root(), null)
     assert.ok(view.find({ text: '현재 보고된 활동이 없습니다.' }))
     assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('keeps named live calls with their owner and shows grouped finished tools between calls in the open chat', async () => {
+  const ctx = { workspaceId: 'w', branch: 'main', displayName: 'Workspace', terminals: [] }
+  const read: SessionWorkNode = { id: 'read-1', kind: 'tool', toolName: 'view_file', state: 'running', children: [] }
+  const worker: SessionWorkNode = { id: 'worker', name: 'reviewer', kind: 'subagent', state: 'working', children: [{ ...read, id: 'read-child' }] }
+  let tree: SessionWorkNode[] = [read, { ...read, id: 'read-2' }, { ...shell, toolName: 'execute' }, { ...edit, toolName: 'edit_file' }, worker]
+  const turnTools: NonNullable<SessionShells['turnTools']> = [
+    { name: 'edit_file', count: 5, state: 'completed' }, { name: 'docs/search', count: 2, state: 'failed' },
+    { name: 'read_file', count: 1, state: 'cancelled' }, { name: 'search_files', count: 1, state: 'completed' }
+  ]
+  let open = true
+  const host = mockHost({ settings: { nativeActivity: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
+    'session.shells': () => ({ ...session, mainWorking: open ? true : undefined, turnTools, turnToolsLimited: true, tree })
+  } })
+  const view = await mount(panel, { host, locale: 'ko-KR' })
+  try {
+    const rootChildren = () => treeRoots(view)[0].children ?? []
+    const recent = () => treeRow(view, '최근 사용 도구')!
+    const more = () => treeRow(view, '도구 1개 더 보기')!
+    assert.deepEqual(rootChildren().map(row => row.label), ['view_file', 'execute', 'edit_file', 'reviewer', '최근 사용 도구'])
+    assert.equal(rootChildren()[0].description, '실행 중 · 2건')
+    assert.equal(rootChildren()[1].description, '실행 중 · zsh')
+    assert.equal(rootChildren()[2].description, '실행 중')
+    assert.equal(rootChildren()[3].children?.[0]?.description, '실행 중')
+    assert.equal(recent().description, '최근 종료 30회 기준')
+    assert.equal(recent().children?.[0]?.description, '5회 종료')
+    assert.equal(recent().children?.[1]?.description, '2회 · 최근 실패')
+    assert.equal(recent().children?.[2]?.description, '취소')
+    assert.ok(view.expandedOf(treeTarget).includes(recent().key))
+    assert.equal(view.expandedOf(treeTarget).includes(more().key), false)
+    await view.selectItem(treeTarget, more().key)
+    assert.ok((view.find(treeTarget)?.props.expanded as string[]).includes(more().key))
+    await view.selectItem(treeTarget, more().children![0].key)
+    assert.ok(view.find({ text: '종료된 호출 1회 · 최근 결과 완료' }))
+    await view.collapse(treeTarget, recent().key)
+    assert.equal(view.find({ text: '종료된 호출 1회 · 최근 결과 완료' }), null)
+    const liveKey = rootChildren()[0].key
+    tree = [{ ...read, id: 'read-2' }]
+    await view.emit('workspace.changed', { context: ctx })
+    assert.equal(rootChildren()[0].key, liveKey)
+    assert.equal(rootChildren()[0].description, '실행 중')
+    assert.equal(view.expandedOf(treeTarget).includes(recent().key), false)
+    tree = []
+    await view.emit('workspace.changed', { context: ctx })
+    assert.deepEqual(rootChildren().map(row => row.label), ['최근 사용 도구'])
+    open = false
+    await view.emit('workspace.changed', { context: ctx })
+    assert.equal(treeRow(view, '최근 사용 도구'), null)
+    assert.deepEqual(view.errors, [])
+    assert.deepEqual(view.warnings, [])
   } finally { await view.unmount() }
 })
 
@@ -371,7 +425,7 @@ test('shows Korean labels and privacy disclosure beside the switch', async () =>
   } })
   const view = await mount(panel, { host, locale: 'ko-KR' })
   try {
-    assert.equal(Boolean(view.find({ text: '감지된 항목' })), true)
+    assert.equal(Boolean(view.find({ text: '스킬 · 플러그인 · MCP' })), true)
     assert.equal(Boolean(view.find({ text: '스킬' })), true)
     await view.toggle({ label: '설정 및 개인정보' })
     await view.toggle({ label: '어떤 정보를 읽나요?' })

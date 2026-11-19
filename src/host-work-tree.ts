@@ -1,10 +1,12 @@
 import { childRoster } from './native-activity'
+import { sessionEditTools, sessionToolName } from './session-tool-label'
 import { workId } from './work-id'
 
 export type SessionWorkNode = {
   id: string
-  kind: 'subagent' | 'shell' | 'edit' | 'background' | 'terminal' | 'workflow' | 'monitor'
+  kind: 'subagent' | 'shell' | 'edit' | 'tool' | 'background' | 'terminal' | 'workflow' | 'monitor'
   name?: string
+  toolName?: string
   state: 'working' | 'monitoring' | 'running' | 'connected' | 'context'
   since?: number
   statusSource?: 'antigravity'
@@ -110,9 +112,14 @@ export function hostWorkTree(agent: Row, session: string, shellLabel: ShellLabel
       const state = raw.state === 'monitoring' ? 'monitoring' : kind === 'background' ? 'running' : 'working'
       const opSince = timestamp(op?.observedAt)
       if (kind === 'subagent' && raw.state === 'working' && op && opSince && (op.basis === 'open' || op.basis === 'reported')) {
+        const toolName = sessionToolName(op.toolName, op.input)
         const executable = shellLabel(op.toolName, op.input)
-        if (executable !== null) children.unshift({ id: workId(session, 'child-shell', hostId, opSince), kind: 'shell',
-          ...(executable ? { name: executable } : {}), state: 'running', since: opSince, children: [] })
+        if (typeof op.toolName === 'string' && op.toolName.trim()) {
+          const operationKind = executable !== null ? 'shell' : sessionEditTools.has(toolName?.toLowerCase() ?? '') ? 'edit' : 'tool'
+          children.unshift({ id: workId(session, 'child-operation', hostId, opSince), kind: operationKind,
+            ...(toolName ? { toolName } : {}), ...(executable ? { name: executable } : {}),
+            state: 'running', since: opSince, children: [] })
+        }
       }
       const node: SessionWorkNode = { id, kind, state, ...(name ? { name } : {}), ...(since ? { since } : {}), children }
       nodes.push(node)

@@ -22,7 +22,7 @@ test('renders English throughout the panel when the host language has no transla
   const host = mockHost({ requests: { 'calls.get': calls, 'toolbox.catalog': () => catalog, 'toolbox.state': initial } })
   const view = await mount(panel, { host, locale: 'kok-IN' })
   try {
-    assert.ok(view.find({ text: 'Detected items' }))
+    assert.ok(view.find({ text: 'Skills, plugins & MCP' }))
     await view.select({ label: 'Traffic Light views' }, 'library')
     assert.ok(view.find({ text: 'Skill · Codex' }))
     await view.press({ text: 'Import 1' })

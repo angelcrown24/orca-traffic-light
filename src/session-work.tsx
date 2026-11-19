@@ -26,7 +26,7 @@ export function refreshSessionWork(visible: () => boolean): Promise<void> {
       const next = await plugin.request('session.shells', { selected: choice })
       if (current !== generation || !visible()) return
       if (!next || !Array.isArray(next.options) || (next.status === 'ready' && !Array.isArray(next.tree))) throw new Error('Shell status unavailable')
-      if (next.status === 'ready' && next.selected) updateWorkTree(next.selected, next.tree!)
+      if (next.status === 'ready' && next.selected) updateWorkTree(next.selected, next.tree!, next.mainWorking ? next.turnTools : undefined)
       set(report, next)
     } catch {
       if (current === generation && visible()) set(report, { status: 'unavailable', selected: null, options: [], rows: [], subagents: [] })
@@ -79,8 +79,9 @@ export function SessionWork({ locale, visible, nativeEnabled, providerEnabled }:
     return refreshSessionWork(visible)
   }
   const ready = nativeEnabled && !loading && result?.status === 'ready'
-  const tree = sessionTree(ready ? result.tree ?? [] : [], locale, providerEnabled)
   const mainWorking = ready && result.mainWorking === true && currentOption?.value.startsWith('chat:') === true
+  const tree = sessionTree(ready ? result.tree ?? [] : [], locale, providerEnabled,
+    mainWorking ? result.turnTools : undefined, mainWorking && result.turnToolsLimited === true)
   const hasWork = mainWorking || tree.children.length > 0
   let status: string | null = t.ready
   if (!nativeEnabled || result?.status === 'disabled') status = t.disabled

@@ -8,7 +8,8 @@ import {
   type ProviderChildStatus
 } from './native-activity'
 import { queryLocalJournal } from './journal-activity'
-import { readSessionJournal, shellTools, type TurnActivity } from './session-work-journal'
+import { readSessionJournal, type TurnActivity, type TurnTool } from './session-work-journal'
+import { sessionShellTools, sessionToolName } from './session-tool-label'
 import { resolveOrcaCli } from './native-reader'
 import { hostWorkTree, type SessionWorkNode } from './host-work-tree'
 import { workId } from './work-id'
@@ -33,6 +34,8 @@ export type SessionShells = {
   tree?: SessionWorkNode[]
   mainWorking?: true
   turnActivity?: TurnActivity
+  turnTools?: TurnTool[]
+  turnToolsLimited?: true
 }
 type Sources = {
   focus?: string | null
@@ -129,8 +132,15 @@ function shellLabel(toolName: unknown, rawInput: unknown): string | null {
   const args = object(input)
   if (args && ('ServerName' in args || 'ToolName' in args || 'mcpIdentity' in args)) return null
   const cmd = args?.cmd ?? args?.command ?? args?.CommandLine ?? args?.command_line
-  if (!shellTools.has(tool) && !(tool === 'execute' && typeof cmd === 'string')) return null
+  if (!sessionShellTools.has(tool) && !(tool === 'execute' && typeof cmd === 'string')) return null
   return program(cmd ?? input) || (tool === 'bash' ? 'bash' : '')
+}
+
+function matchesChildOperation(preview: SessionWorkNode, call: SessionWorkNode): boolean {
+  if (preview.kind !== call.kind) return false
+  if (preview.kind === 'shell') return true
+  if (preview.kind !== 'tool' && preview.kind !== 'edit') return false
+  return !preview.toolName || preview.toolName === call.toolName
 }
 
 export async function readSessionShells(
@@ -201,17 +211,24 @@ export async function readSessionShells(
   if (choice.kind === 'chat' && mainWorking) {
     result.mainWorking = true
     if (journal?.activity) result.turnActivity = journal.activity
+    if (journal?.turnTools.length) result.turnTools = journal.turnTools
+    if (journal?.turnToolsLimited) result.turnToolsLimited = true
   }
   const branch = choice.kind === 'terminal' ? result.tree[0].children : result.tree
   const rootCalls = journal?.calls.get(null) ?? []
   branch.push(...rootCalls)
   const previewMatchesTurn = !afterSettledTurn || (updatedAt && mainStartedAt && updatedAt >= mainStartedAt)
   if (mainWorking && previewMatchesTurn && preview !== null && !journal?.previewEnded && !rootCalls.some(node => node.kind === 'shell')) {
-    branch.push({ id: workId(handle, 'foreground-preview', preview), kind: 'shell', ...(preview ? { name: preview } : {}), state: 'running', children: [] })
+    const toolName = sessionToolName(agent.toolName)
+    branch.push({ id: workId(handle, 'foreground-preview', preview), kind: 'shell', ...(preview ? { name: preview } : {}),
+      ...(toolName ? { toolName } : {}), state: 'running', children: [] })
   }
-  for (const [owner, shells] of journal?.calls ?? []) {
-    // The host preview is a fallback for the same producer. Preserve its genuine background children.
-    if (owner) owner.children = [...shells, ...owner.children.filter(n => n.kind !== 'shell')]
+  for (const [owner, calls] of journal?.calls ?? []) {
+    if (!owner) continue
+    // The journal and the host can both report a child's foreground operation.
+    // Preserve its other live operations and explicit delegated children.
+    const remaining = owner.children.filter(node => !calls.some(call => matchesChildOperation(node, call)))
+    owner.children = [...calls, ...remaining]
   }
   branch.push(...host.nodes)
   const scope = { result: { worktrees: [{ ...row, agents: [agent] }] } }

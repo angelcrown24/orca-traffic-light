@@ -19,8 +19,14 @@ export default defineCheck({
   fresh: { requests },
   antigravityWorking: { settings: { nativeActivity: true }, requests: { ...requests,
     'session.shells': () => ({ status: 'ready', options: [{ id: 'chat:demo', kind: 'chat', provider: 'antigravity', number: 1 }],
-      selected: 'chat:demo', mainWorking: true, turnActivity: { tools: 15, commands: 6, edits: 8 }, rows: [], subagents: [],
-      tree: [{ id: 'active-edit', kind: 'edit', state: 'running', children: [] }] }),
+      selected: 'chat:demo', mainWorking: true, turnActivity: { tools: 13, commands: 1, edits: 3 }, rows: [], subagents: [],
+      turnTools: [
+        { name: 'read_file', count: 6, state: 'completed' }, { name: 'edit_file', count: 2, state: 'completed' },
+        { name: 'search', count: 1, state: 'failed' }, { name: 'execute', count: 1, state: 'completed' },
+      ], tree: [
+        { id: 'active-edit', kind: 'edit', toolName: 'edit_file', state: 'running', children: [] },
+        ...['view-a','view-b'].map(id => ({ id, kind: 'tool' as const, toolName: 'view_file', state: 'running' as const, children: [] })),
+      ] }),
     'native.get': () => ({ status: 'ready', resources: [], activities: [] })
   } },
   antigravityChild: { settings: { nativeActivity: true, antigravityChildStatus: true }, requests: { ...requests,

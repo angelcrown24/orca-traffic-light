@@ -1,5 +1,11 @@
 # Release history
 
+## [v0.11.2](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.11.2) · Show tool names under each working chat
+
+- Session activity displays named live tools, including reads, searches, edits, shell calls and identified MCP tools. Concurrent calls to the same read or edit tool share a count under their owner.
+- A working chat keeps recently used tool names visible between calls. Repeated uses show their count, and selecting a tool shows its latest outcome.
+- The workspace resource section is now labeled **Skills, plugins & MCP**. The selected chat’s tool tree remains above it.
+
 ## [v0.11.1](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.11.1) · Keep working chats visible between calls
 
 - Session activity shows the main agent as **Working** while it continues its turn, including Antigravity chats between tool calls.

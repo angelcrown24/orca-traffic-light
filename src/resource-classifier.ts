@@ -39,7 +39,7 @@ function skillArgument(input: unknown): string | undefined {
 type McpIdentity = { server: unknown; tool: unknown }
 
 /** Native tools can arrive as structured JSON or the CLI's bounded JSON preview. */
-function structuredInput(input: unknown): unknown {
+export function structuredInput(input: unknown): unknown {
   if (typeof input === 'string' && input.trimStart().startsWith('{')) {
     if (input.length > 16384) return null
     try { return JSON.parse(input) } catch { return null }
@@ -47,7 +47,7 @@ function structuredInput(input: unknown): unknown {
   return input
 }
 
-function mcpIdentity(tool: string, input: unknown, native?: McpIdentity): { server: string; tool: string } | null {
+export function mcpIdentity(tool: string, input: unknown, native?: McpIdentity): { server: string; tool: string } | null {
   let server = native?.server, operation = native?.tool
   if (!server && tool === 'execute' && input && typeof input === 'object' && !Array.isArray(input)) {
     const args = input as Record<string, unknown>
