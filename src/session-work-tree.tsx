@@ -1,20 +1,20 @@
 import { atom, Badge, Box, read, RelativeTime, Row, set, Text, Tree, type IconName, type TreeItem } from 'orca'
-import type { SessionWorkNode } from './session-shells'
+import type { SessionShells, SessionWorkNode } from './session-shells'
 
 const copy = {
   en: {
-    tree: 'Execution tree', subagent: 'Subagent', shell: 'Shell', background: 'Background command', terminal: 'Terminal',
+    tree: 'Execution tree', subagent: 'Subagent', shell: 'Shell', edit: 'File edit', background: 'Background command', terminal: 'Terminal',
     workflow: 'Workflow', monitor: 'Monitor', working: 'Working', monitoring: 'Monitoring', running: 'Running',
     connected: 'Connected', context: 'Parent', since: 'Started', reported: 'Antigravity · Last reported',
   },
   ko: {
-    tree: '실행 트리', subagent: '서브에이전트', shell: '셸', background: '백그라운드 명령', terminal: '터미널',
+    tree: '실행 트리', subagent: '서브에이전트', shell: '셸', edit: '파일 편집', background: '백그라운드 명령', terminal: '터미널',
     workflow: '워크플로', monitor: '모니터', working: '작업 중', monitoring: '모니터링 중', running: '실행 중',
     connected: '연결됨', context: '상위 작업', since: '시작', reported: 'Antigravity · 마지막 보고',
   },
 }
 const icons: Record<SessionWorkNode['kind'], IconName> = {
-  subagent: 'bot', shell: 'terminal', background: 'terminal', terminal: 'terminal', workflow: 'layers', monitor: 'activity',
+  subagent: 'bot', shell: 'terminal', edit: 'edit', background: 'terminal', terminal: 'terminal', workflow: 'layers', monitor: 'activity',
 }
 // Orca counts the session itself in both native Tree limits.
 const maxTreeDepth = 16
@@ -56,7 +56,7 @@ export function updateWorkTree(session: string, nodes: SessionWorkNode[]) {
 
 export function sessionTree(nodes: SessionWorkNode[], locale: keyof typeof copy, providerEnabled: boolean) {
   const t = copy[locale], details = new Map<string, { node: SessionWorkNode; label: string }>()
-  const branches = [rootKey]
+  const branches: string[] = []
   let remaining = maxTreeItems - 1, omitted = 0, activeAgents = 0
   function visible(node: SessionWorkNode): boolean {
     if (node.statusSource === 'antigravity' && !providerEnabled) return false
@@ -80,15 +80,30 @@ export function sessionTree(nodes: SessionWorkNode[], locale: keyof typeof copy,
     return rows
   }
   const children = items(nodes, 2)
+  if (children.length) branches.push(rootKey)
   return { children, branches, details, activeAgents, omitted }
 }
 
-export function SessionWorkTree({ model, locale, name, terminal }: {
-  model: ReturnType<typeof sessionTree>; locale: keyof typeof copy; name: string; terminal: boolean
+function turnSummary(activity: SessionShells['turnActivity'], locale: keyof typeof copy): string {
+  if (!activity) return ''
+  const { tools, commands, edits } = activity
+  const ko = locale === 'ko'
+  const counts: string[] = []
+  if (tools > 0) counts.push(ko ? `도구 호출 ${tools}회` : `${tools} tool call${tools === 1 ? '' : 's'}`)
+  if (commands > 0) counts.push(ko ? `명령 ${commands}회` : `${commands} command${commands === 1 ? '' : 's'}`)
+  if (edits > 0) counts.push(ko ? `변경 기록 ${edits}건` : `${edits} diff${edits === 1 ? '' : 's'}`)
+  return counts.length ? [ko ? '이번 턴' : 'This turn', ...counts].join(' · ') : ''
+}
+
+export function SessionWorkTree({ model, locale, name, terminal, mainWorking, turnActivity }: {
+  model: ReturnType<typeof sessionTree>; locale: keyof typeof copy; name: string; terminal: boolean; mainWorking: boolean
+  turnActivity?: SessionShells['turnActivity']
 }) {
   const t = copy[locale], folds = read(collapsed), choice = read(selected)
-  const root: TreeItem = { key: rootKey, label: name, icon: terminal ? 'terminal' : 'branch', children: model.children }
+  const root: TreeItem = { key: rootKey, label: name, icon: terminal ? 'terminal' : 'branch',
+    ...(mainWorking ? { description: t.working } : {}), ...(model.children.length ? { children: model.children } : {}) }
   const detail = choice ? model.details.get(choice) : undefined
+  const summary = turnSummary(turnActivity, locale)
   const select = ({ key }: { key: string }) => set(selected, key)
   function toggle({ key, expanded }: { key: string; expanded: boolean }) {
     const previous = read(collapsed)
@@ -101,6 +116,7 @@ export function SessionWorkTree({ model, locale, name, terminal }: {
     <Tree label={t.tree} items={[root]} maxHeight="md" expanded={model.branches.filter(id => !folds.includes(id))}
       selected={detail ? choice! : choice === rootKey ? rootKey : undefined}
       onSelect={select} onAction={select} onToggle={toggle} />
+    {summary ? <Text size="xs" muted>{summary}</Text> : null}
     {model.omitted ? <Text size="xs" muted>{locale === 'ko' ? `Orca 표시 한도로 항목 ${model.omitted}개가 생략되었습니다.`
       : `${model.omitted} more ${model.omitted === 1 ? 'item exceeds' : 'items exceed'} Orca’s tree display limit.`}</Text> : null}
     {detail ? <Box direction="column" gap="xs" padding="sm" background="muted" radius="sm">

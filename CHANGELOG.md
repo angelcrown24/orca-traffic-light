@@ -1,5 +1,10 @@
 # Release history
 
+## [v0.11.1](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.11.1) · Keep working chats visible between calls
+
+- Session activity shows the main agent as **Working** while it continues its turn, including Antigravity chats between tool calls.
+- An open chat turn can show cumulative tool calls, commands and change records. A running file-edit call has its own row and clears when the edit finishes.
+
 ## [v0.11.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.11.0) · See delegated work as a tree
 
 - Session activity opens with the selected chat or terminal at the root. Parallel agents, nested agents and running commands appear under their reported owners.

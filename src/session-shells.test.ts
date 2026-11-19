@@ -316,3 +316,66 @@ test('Codex child shells require matching producer, precise thread and current c
     await read([worker], 'gemini'),
   ]) assert.deepEqual(reply.rows.map(row => row.name), ['npm'])
 })
+
+test('Neon shows the open main turn, finished-call totals, and only live edit or shell nodes from that turn', async () => {
+  if (process.platform !== 'darwin') return
+  const schema = `PRAGMA user_version=2;
+    CREATE TABLE journal_chat_state(session_id,epoch,workspace_id);
+    CREATE TABLE journal_items(session_id,epoch,hidden,root,kind,turn_marker,sequence,sequence_index,ordinal,item_id,lifecycle_state,turn_item_id,payload_json);
+    INSERT INTO journal_chat_state VALUES ('${sid}',1,'raw');
+    INSERT INTO journal_items VALUES ('${sid}',1,0,1,'turn',1,20,0,0,'turn','running',NULL,'{"observedAt":100,"body":{"startedAt":100}}');`
+  function call(item: string, name: string, input: unknown, state: string, time: number) {
+    const payload = JSON.stringify({ observedAt: time, body: { kind: 'tool-call', name, input, state } })
+    return `INSERT INTO journal_items VALUES ('${sid}',1,0,1,'tool-call',0,${time},0,0,'${item}','${state}','turn','${payload}');`
+  }
+  const data = [
+    call('shell', 'execute', { command: 'python3 PRIVATE.py' }, 'running', 210),
+    call('edit', 'edit_file', { command: 42, file: 'PRIVATE', edits: ['PRIVATE'] }, 'running', 220),
+    call('mcp', 'execute', { command: 'npm PRIVATE', ServerName: 'PRIVATE', ToolName: 'edit_file' }, 'completed', 130),
+    call('read', 'read_file', { file: 'PRIVATE' }, 'completed', 140),
+    call('old-edit', 'write_file', {}, 'completed', 150),
+    call('not-shell', 'execute', { command: { text: 'PRIVATE' } }, 'running', 155),
+    call('mcp-edit', 'edit_file', { ServerName: 'PRIVATE', ToolName: 'PRIVATE' }, 'running', 158),
+    `INSERT INTO journal_items VALUES
+      ('${sid}',1,0,1,'diff',0,151,0,0,'d',NULL,'turn','{}'),
+      ('${sid}',1,0,1,'diff',0,152,0,0,'d2',NULL,'turn','{}'),
+      ('${sid}',1,1,1,'diff',0,153,0,0,'hidden',NULL,'turn','{}'),
+      ('${sid}',1,0,0,'diff',0,154,0,0,'child',NULL,'turn','{}'),
+      ('${sid}',1,0,1,'diff',0,10,0,0,'old',NULL,'previous','{}'),
+      ('${second}',1,0,1,'diff',0,160,0,0,'foreign',NULL,'turn','{}');`,
+  ].join('\n')
+  const read = (changes = '', host: Record<string, unknown> = {}) => readSessionShells(ctx,
+    snapshot([{ ...agent, stateStartedAt: 100, mainAgent: { state: 'working', stateStartedAt: 100 },
+      toolName: 'execute', toolInput: { command: 'python3 PRIVATE.py' }, updatedAt: 210, ...host }]), id, {
+      journal: (sql: string) => new Promise((resolve, reject) => execFile('/usr/bin/sqlite3',
+        ['-json', ':memory:', schema + data + changes + sql], { timeout: 2000, encoding: 'utf8', maxBuffer: 96000 },
+        (error, out) => error ? reject(error) : resolve(JSON.parse(out || '[]'))))
+    })
+  const open = await read()
+  assert.equal(open.mainWorking, true)
+  assert.deepEqual(open.turnActivity, { tools: 7, commands: 1, edits: 2 })
+  assert.deepEqual(open.tree?.map(n => [n.kind, n.name ?? null]), [['edit', null], ['shell', 'python3']])
+  assert.equal(JSON.stringify(open).includes('PRIVATE'), false)
+  const shellFinished = "UPDATE journal_items SET lifecycle_state='completed' WHERE item_id='shell';"
+  const editOnly = await read(shellFinished)
+  assert.deepEqual(editOnly.tree?.map(n => n.kind), ['edit'])
+  const newShell = await read(shellFinished, { updatedAt: 230 })
+  assert.deepEqual(newShell.tree?.map(n => n.kind), ['edit', 'shell'])
+  const finish = "UPDATE journal_items SET lifecycle_state='completed' WHERE item_id IN ('shell','edit');"
+  const between = await read(finish)
+  assert.equal(between.mainWorking, true)
+  assert.deepEqual(between.turnActivity, open.turnActivity)
+  assert.deepEqual(between.tree, [])
+  assert.deepEqual((await read(finish, { updatedAt: 225 })).tree?.map(n => n.name), ['python3'])
+  const overLimit = await read(finish + `WITH RECURSIVE x(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM x WHERE i<1001)
+    INSERT INTO journal_items SELECT '${sid}',1,0,1,'diff',0,500+i,0,0,'diff'||i,NULL,'turn','{}' FROM x;`)
+  assert.equal(overLimit.mainWorking, true)
+  assert.equal(overLimit.turnActivity, undefined)
+  const end = "UPDATE journal_items SET lifecycle_state='completed',payload_json='{\"body\":{\"completedAt\":300}}' WHERE kind='turn';"
+  const settled = await read(finish + end)
+  assert.deepEqual([settled.mainWorking, settled.turnActivity, settled.tree], [undefined, undefined, []])
+  const newest = await read(finish + end, { mainAgent: { state: 'working', stateStartedAt: 310 } })
+  assert.deepEqual([newest.mainWorking, newest.turnActivity, newest.tree], [true, undefined, []])
+  const idle = await read('', { mainAgent: { state: 'done' } })
+  assert.deepEqual([idle.mainWorking, idle.turnActivity, idle.tree], [undefined, undefined, []])
+})

@@ -39,6 +39,7 @@ const options = [
   { id: 'terminal:two', kind: 'terminal' as const, number: 1 }
 ]
 const shell: SessionWorkNode = { id: 'sh', name: 'zsh', kind: 'shell', state: 'running', children: [] }
+const edit: SessionWorkNode = { id: 'edit', kind: 'edit', state: 'running', children: [] }
 const terminal: SessionWorkNode = { id: 'term', name: 'fish', kind: 'terminal', state: 'connected', children: [] }
 const treeTarget = { type: 'Tree' }
 function treeRoots(view: TestPanel) {
@@ -67,7 +68,7 @@ test('shows the selected session shells with its active subagents and removes co
       { agentType: 'another-workspace-agent', state: 'working', toolName: null },
       { agentType: 'completed-parent', state: 'done', toolName: null }
     ] }),
-    'session.shells': () => ({ ...session, subagents: [
+    'session.shells': () => ({ ...session, mainWorking: true, turnActivity: { tools: 4, commands: 1, edits: 0 }, subagents: [
       { role: 'subagent', label: 'review', agentType: 'antigravity', state: 'working', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000000 },
       { role: 'subagent', label: 'watch', agentType: 'codex', state: 'monitoring', toolName: null },
       { role: 'subagent', label: 'finished', agentType: 'codex', state: 'done', toolName: null },
@@ -76,7 +77,7 @@ test('shows the selected session shells with its active subagents and removes co
     ], tree: [
       shell,
       { id: 'review', name: 'review', kind: 'subagent', state: 'working', statusSource: 'antigravity', statusUpdatedAt: 1700000000000, children: [] },
-      { id: 'watch', name: 'watch', kind: 'subagent', state: 'monitoring', children: [] }
+      { id: 'watch', name: 'watch', kind: 'subagent', state: 'monitoring', children: [edit] }
     ] })
   } })
   const view = await mount(panel, { host })
@@ -84,10 +85,13 @@ test('shows the selected session shells with its active subagents and removes co
     assert.ok(view.find({ text: 'Session activity' }))
     assert.ok(view.find({ text: '2 active subagents' }))
     assert.equal(treeRoots(view)[0]?.label, 'Codex Chat 1')
+    assert.equal(treeRoots(view)[0]?.description, 'Working')
+    assert.ok(view.find({ text: 'This turn · 4 tool calls · 1 command' }))
     assert.ok(treeRow(view, 'zsh'))
     assert.ok(treeRow(view, 'review'))
     assert.ok(treeRow(view, 'watch'))
     assert.equal(treeRow(view, 'watch')?.description, 'Monitoring')
+    assert.equal(treeRow(view, 'watch')?.children?.[0]?.label, 'File edit')
     await view.selectItem(treeTarget, 'review')
     assert.equal(view.find({ type: 'RelativeTime' })?.props.at, 1700000000000)
     for (const text of ['another-workspace-agent', 'completed-parent', 'finished', 'idle-job', 'uncertain-job', 'Agent activity', 'Done', 'Idle']) {
@@ -98,6 +102,46 @@ test('shows the selected session shells with its active subagents and removes co
     await view.toggle({ label: 'Show Antigravity subagent status' })
     assert.equal(treeRow(view, 'review'), null)
     assert.ok(treeRow(view, 'watch'))
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('shows a working Antigravity chat even without child events and clears its status independently of its children', async () => {
+  const ctx = { workspaceId: 'workspace-1', branch: 'main', displayName: 'Workspace', terminals: [] }
+  let mainWorking: true | undefined = true
+  let tree: SessionWorkNode[] = []
+  const host = mockHost({ settings: { nativeActivity: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
+    'session.shells': () => ({ ...session, options: [{ ...options[0], provider: 'antigravity' }], rows: [],
+      ...(mainWorking ? { mainWorking } : {}), turnActivity: { tools: 15, commands: 6, edits: 8 }, tree })
+  } })
+  const view = await mount(panel, { host, locale: 'ko-KR' })
+  try {
+    const root = () => treeRow(view, 'Antigravity 대화 1')
+    const summary = { text: '이번 턴 · 도구 호출 15회 · 명령 6회 · 변경 기록 8건' }
+    assert.equal(root()?.description, '작업 중')
+    assert.ok(view.find(summary))
+    assert.equal(root()?.children, undefined)
+    assert.equal(view.find({ text: '현재 보고된 활동이 없습니다.' }), null)
+    tree = [edit]
+    await view.emit('workspace.changed', { context: ctx })
+    assert.equal(root()?.description, '작업 중')
+    assert.equal(root()?.children?.[0]?.label, '파일 편집')
+    assert.equal(root()?.children?.[0]?.description, '실행 중')
+    tree = [shell]
+    await view.emit('workspace.changed', { context: ctx })
+    assert.equal(treeRow(view, '파일 편집'), null)
+    assert.ok(view.find(summary))
+    mainWorking = undefined
+    await view.emit('workspace.changed', { context: ctx })
+    assert.equal(root()?.description, undefined)
+    assert.equal(view.find(summary), null)
+    assert.equal(root()?.children?.[0]?.label, 'zsh')
+    tree = []
+    await view.emit('workspace.changed', { context: ctx })
+    assert.equal(root(), null)
+    assert.ok(view.find({ text: '현재 보고된 활동이 없습니다.' }))
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })
@@ -210,12 +254,12 @@ test('distinguishes a verified empty session, disabled monitoring and an unavail
     assert.equal(view.find({ label: 'Show Antigravity subagent status' })?.disabled, true)
     status = 'ready'
     await view.toggle({ label: 'Show chat activity' })
-    assert.ok(view.find({ text: 'No running shells or subagents reported.' }))
+    assert.ok(view.find({ text: 'No current activity reported.' }))
     assert.equal(view.find({ text: 'Agent activity' }), null)
     status = 'unavailable'
     await view.emit('workspace.changed', { context: null })
     assert.ok(view.find({ text: 'Session status is unavailable.' }))
-    assert.equal(view.find({ text: 'No running shells or subagents reported.' }), null)
+    assert.equal(view.find({ text: 'No current activity reported.' }), null)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })

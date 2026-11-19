@@ -3,7 +3,7 @@ import { workId } from './work-id'
 
 export type SessionWorkNode = {
   id: string
-  kind: 'subagent' | 'shell' | 'background' | 'terminal' | 'workflow' | 'monitor'
+  kind: 'subagent' | 'shell' | 'edit' | 'background' | 'terminal' | 'workflow' | 'monitor'
   name?: string
   state: 'working' | 'monitoring' | 'running' | 'connected' | 'context'
   since?: number

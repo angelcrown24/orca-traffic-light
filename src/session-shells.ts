@@ -7,9 +7,10 @@ import {
   type NativeActivity,
   type ProviderChildStatus
 } from './native-activity'
-import { journalEpoch, queryLocalJournal } from './journal-activity'
+import { queryLocalJournal } from './journal-activity'
+import { readSessionJournal, shellTools, type TurnActivity } from './session-work-journal'
 import { resolveOrcaCli } from './native-reader'
-import { hostWorkTree, type ChildShellOwner, type SessionWorkNode } from './host-work-tree'
+import { hostWorkTree, type SessionWorkNode } from './host-work-tree'
 import { workId } from './work-id'
 
 export type { SessionWorkNode } from './host-work-tree'
@@ -30,6 +31,8 @@ export type SessionShells = {
   rows: SessionShellRow[]
   subagents: NativeActivity[]
   tree?: SessionWorkNode[]
+  mainWorking?: true
+  turnActivity?: TurnActivity
 }
 type Sources = {
   focus?: string | null
@@ -41,19 +44,6 @@ const object = (v: unknown): Row | null => (typeof v === 'object' && v !== null 
 const uuid = '[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}'
 const terminalHandle = new RegExp('^term_' + uuid + '$')
 const knownProviders = new Set(['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'droid', 'gemini', 'grok', 'omp', 'opencode', 'pi'])
-const shellTools = new Set([
-  'bash',
-  'shell',
-  'terminal',
-  'run_command',
-  'run_shell_command',
-  'exec_command',
-  'functions.exec_command',
-  'functions/exec_command',
-  'shell_command',
-  'functions.shell_command',
-  'functions/shell_command'
-])
 const programs = new Set([
   'bash',
   'sh',
@@ -143,66 +133,6 @@ function shellLabel(toolName: unknown, rawInput: unknown): string | null {
   return program(cmd ?? input) || (tool === 'bash' ? 'bash' : '')
 }
 
-// A root call must be in its open main turn. A Codex child call must name both the
-// verified producer and its exact open child turn, which can outlive the main turn.
-async function runningJournalShells(id: string, workspace: string, rootWorking: boolean,
-    owners: ReadonlyMap<string, ChildShellOwner>, query: NonNullable<Sources['journal']>) {
-  const result = new Map<SessionWorkNode | null, SessionWorkNode[]>()
-  const epoch = journalEpoch(id, workspace)
-  if (!epoch) return result
-  const literal = (v: string) => "'" + v.replace(/'/g, "''") + "'"
-  const bindings = [...owners].slice(0, 50).map(([thread, { prefix }]) => '(' + literal(thread) + ',' + literal(prefix) + ')')
-  const ownerList = bindings.length ? 'codex(thread, prefix) AS (VALUES ' + bindings.join(',') + '),' : ''
-  const root = rootWorking ? "(root=1 AND turn_item_id=(SELECT item_id FROM turn) AND (SELECT lifecycle_state FROM turn)='running')" : '0'
-  const child = bindings.length ? 'OR (root=0 AND EXISTS (SELECT 1 FROM codex WHERE thread=producer_agent_id AND substr(item_id,1,length(prefix))=prefix))' : ''
-  const sql = `WITH epoch AS (${epoch}),
-  turn AS (SELECT item_id,lifecycle_state FROM journal_items WHERE session_id='${id}' AND epoch=(SELECT epoch FROM epoch)
-    AND hidden=0 AND root=1 AND kind='turn' AND turn_marker=1 ORDER BY sequence DESC,sequence_index DESC,ordinal DESC LIMIT 1),
-  ${ownerList}
-  calls AS (SELECT epoch, item_id, ${bindings.length ? 'CASE WHEN root=0 THEN producer_agent_id END' : 'NULL'} AS owner,
-    lower(json_extract(payload_json,'$.body.name')) AS raw_tool,
-    json_extract(payload_json,'$.observedAt') AS at_ms,
-    coalesce(json_extract(payload_json,'$.body.input.command'), json_extract(payload_json,'$.body.input.cmd'),
-      json_extract(payload_json,'$.body.input.CommandLine'), json_extract(payload_json,'$.body.input.command_line'),
-      CASE WHEN json_type(payload_json,'$.body.input')='text'
-        AND lower(json_extract(payload_json,'$.body.name')) NOT IN ('execute','running execute')
-        THEN json_extract(payload_json,'$.body.input') END) AS cmd
-    FROM journal_items WHERE session_id='${id}' AND epoch=(SELECT epoch FROM epoch) AND hidden=0
-    AND kind='tool-call' AND lifecycle_state='running' AND (${root} ${child})
-    AND (SELECT user_version FROM pragma_user_version)=2
-    AND json_extract(payload_json,'$.body.mcpIdentity') IS NULL AND json_extract(payload_json,'$.body.input.ServerName') IS NULL
-    AND json_extract(payload_json,'$.body.input.ToolName') IS NULL),
-  normalized AS (SELECT CASE WHEN raw_tool LIKE 'running %' THEN substr(raw_tool,9) ELSE raw_tool END AS tool,
-    epoch, item_id, owner, at_ms, ltrim(replace(substr(cmd,1,512),char(9),' ')) AS line FROM calls WHERE cmd IS NULL OR typeof(cmd)='text'),
-  shells AS (SELECT epoch, item_id, owner, tool, at_ms,
-    row_number() OVER (PARTITION BY owner IS NULL ORDER BY at_ms DESC, item_id) AS bucket, substr(line,1,instr(line||' ',' ')-1) AS executable FROM normalized
-    WHERE tool IN (${[...shellTools].map((s) => "'" + s + "'").join(',')}) OR (tool='execute' AND line IS NOT NULL)
-    ),
-  programs(name) AS (VALUES ${[...programs].map((s) => "('" + s + "')").join(',')})
-  SELECT epoch, item_id, owner, tool, at_ms, (SELECT name FROM programs WHERE executable=name OR (executable NOT GLOB '*[^a-zA-Z0-9_./+-]*' AND executable LIKE '%/'||name) LIMIT 1) AS program
-    FROM shells WHERE bucket<=30 ORDER BY at_ms DESC, item_id;`
-  const out = await query(sql)
-  if (!Array.isArray(out)) return result
-  for (const value of out.slice(0, 60)) {
-    const item = object(value)
-    if (!item || typeof item.tool !== 'string' || !(shellTools.has(item.tool) || item.tool === 'execute')) continue
-    const epoch = item.epoch, itemId = item.item_id
-    if ((typeof epoch !== 'string' && typeof epoch !== 'number') || !String(epoch).length || String(epoch).length > 256 ||
-        typeof itemId !== 'string' || !itemId.length || itemId.length > 4096) continue
-    const owner = typeof item.owner === 'string' ? owners.get(item.owner) : undefined
-    if (item.owner !== null && (!owner || !itemId.startsWith(owner.prefix) || !/^(0|[1-9][0-9]{0,15})$/.test(itemId.slice(owner.prefix.length)))) continue
-    if (item.owner === null && !rootWorking) continue
-    const since = at(item.at_ms)
-    const name = typeof item.program === 'string' && programs.has(item.program) ? item.program : item.tool === 'bash' ? 'bash' : ''
-    const key = owner?.node ?? null
-    const group = result.get(key) ?? []
-    group.push({ id: workId(id, 'journal-shell', epoch, itemId), children: [], kind: 'shell', ...(name ? { name } : {}),
-      state: 'running', ...(since ? { since } : {}) })
-    result.set(key, group)
-  }
-  return result
-}
-
 export async function readSessionShells(
   context: Context,
   snapshot: unknown,
@@ -259,16 +189,27 @@ export async function readSessionShells(
   try { host = hostWorkTree(agent, handle, shellLabel, program) }
   catch { return { ...result, status: 'unavailable', rows: [], tree: [] } }
   const rootWorking = mainAgentWorking(agent)
-  const calls = choice.kind === 'chat' && (rootWorking || host.codexOwners.size) && typeof row.worktreeId === 'string'
-    ? await runningJournalShells(handle, row.worktreeId, rootWorking, host.codexOwners, sources.journal ?? queryLocalJournal).catch(() => null) : null
   const preview = rootWorking ? shellLabel(agent.toolName, agent.toolInput) : null
+  const updatedAt = at(agent.updatedAt)
+  const previewEvent = preview !== null && typeof agent.toolName === 'string' && updatedAt
+    ? { tool: agent.toolName.replace(/^running /i, '').toLowerCase(), updatedAt } : undefined
+  const journal = choice.kind === 'chat' && (rootWorking || host.codexOwners.size) && typeof row.worktreeId === 'string'
+    ? await readSessionJournal(handle, row.worktreeId, rootWorking, host.codexOwners, programs, sources.journal ?? queryLocalJournal, previewEvent).catch(() => null) : null
+  const mainStartedAt = at(object(agent.mainAgent)?.stateStartedAt ?? agent.stateStartedAt)
+  const afterSettledTurn = journal?.turnEndedAt && mainStartedAt && mainStartedAt > journal.turnEndedAt
+  const mainWorking = rootWorking && (!journal?.turnSettled || afterSettledTurn)
+  if (choice.kind === 'chat' && mainWorking) {
+    result.mainWorking = true
+    if (journal?.activity) result.turnActivity = journal.activity
+  }
   const branch = choice.kind === 'terminal' ? result.tree[0].children : result.tree
-  const rootCalls = calls?.get(null) ?? []
+  const rootCalls = journal?.calls.get(null) ?? []
   branch.push(...rootCalls)
-  if (!rootCalls.length && preview !== null) {
+  const previewMatchesTurn = !afterSettledTurn || (updatedAt && mainStartedAt && updatedAt >= mainStartedAt)
+  if (mainWorking && previewMatchesTurn && preview !== null && !journal?.previewEnded && !rootCalls.some(node => node.kind === 'shell')) {
     branch.push({ id: workId(handle, 'foreground-preview', preview), kind: 'shell', ...(preview ? { name: preview } : {}), state: 'running', children: [] })
   }
-  for (const [owner, shells] of calls ?? []) {
+  for (const [owner, shells] of journal?.calls ?? []) {
     // The host preview is a fallback for the same producer. Preserve its genuine background children.
     if (owner) owner.children = [...shells, ...owner.children.filter(n => n.kind !== 'shell')]
   }

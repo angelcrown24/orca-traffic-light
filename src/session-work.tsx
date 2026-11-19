@@ -40,14 +40,14 @@ export function refreshSessionWork(visible: () => boolean): Promise<void> {
 const copy = {
   en: {
     title: 'Session activity', session: 'Session', chat: 'Chat', terminal: 'Terminal',
-    choose: 'Choose a session', auto: 'Follow selection', ready: 'No running shells or subagents reported.',
+    choose: 'Choose a session', auto: 'Follow selection', ready: 'No current activity reported.',
     missing: 'The selected session is no longer available. Choose a session to continue.',
     noSession: 'No local chat or terminal is available in this workspace.', unavailable: 'Session status is unavailable.', disabled: 'Turn on chat activity in Settings & privacy to monitor this session.',
     loading: 'Checking session…'
   },
   ko: {
     title: '세션 활동', session: '세션', chat: '대화', terminal: '터미널',
-    choose: '세션 선택', auto: '선택한 세션 따라가기', ready: '실행 중으로 보고된 셸이나 서브에이전트가 없습니다.',
+    choose: '세션 선택', auto: '선택한 세션 따라가기', ready: '현재 보고된 활동이 없습니다.',
     missing: '선택한 세션을 확인할 수 없습니다. 다른 세션을 선택하세요.',
     noSession: '이 작업공간에 선택할 로컬 대화나 터미널이 없습니다.', unavailable: '세션 상태를 확인할 수 없습니다.', disabled: '이 세션을 보려면 설정 및 개인정보에서 채팅 활동 표시를 켜세요.',
     loading: '세션 확인 중…'
@@ -80,7 +80,8 @@ export function SessionWork({ locale, visible, nativeEnabled, providerEnabled }:
   }
   const ready = nativeEnabled && !loading && result?.status === 'ready'
   const tree = sessionTree(ready ? result.tree ?? [] : [], locale, providerEnabled)
-  const hasWork = tree.children.length > 0
+  const mainWorking = ready && result.mainWorking === true && currentOption?.value.startsWith('chat:') === true
+  const hasWork = mainWorking || tree.children.length > 0
   let status: string | null = t.ready
   if (!nativeEnabled || result?.status === 'disabled') status = t.disabled
   else if (loading) status = t.loading
@@ -99,7 +100,8 @@ export function SessionWork({ locale, visible, nativeEnabled, providerEnabled }:
       value={choice ? (pinned ? choice : '') : (currentOption ? automatic : '')} placeholder={t.choose}
       options={[{ value: automatic, label: !choice && currentOption && !hasWork ? t.auto + ' · ' + currentOption.label : t.auto }, ...options]}
       onChange={choose} /> : null}
-    {hasWork ? <SessionWorkTree model={tree} locale={locale} name={currentOption?.label ?? t.session}
+    {hasWork ? <SessionWorkTree model={tree} locale={locale} name={currentOption?.label ?? t.session} mainWorking={mainWorking}
+      turnActivity={mainWorking ? result.turnActivity : undefined}
       terminal={result?.selected?.startsWith('terminal:') === true} /> : status ? <Text size="sm" muted>{status}</Text> : null}
   </Stack>
 }
