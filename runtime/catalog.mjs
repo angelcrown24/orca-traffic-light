@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import toml from './vendor/smol-toml.cjs'
 import { decorateSharing, inspectSkillPackage } from './shared-sync.mjs'
-import { skillPortability } from './skill-portability.mjs'
+import { isNativeTool, skillPortability } from './skill-portability.mjs'
 
 const CONFIG_LIMIT = 2 * 1024 * 1024
 const SKILL_LIMIT = 64 * 1024
@@ -64,45 +64,47 @@ function metadata(content, fallback) {
 }
 
 const stringMap = (value) => plain(value) && Object.values(value).every((item) => typeof item === 'string')
-const restrictions = ['enabled_tools', 'disabled_tools', 'includeTools', 'excludeTools', 'allowedTools', 'blockedTools']
-const nativeNames = new Set(['node_repl', 'computer-use', 'codex_apps', 'codex-app-tools', 'unified-computer-use'])
+const restrictions = ['enabled_tools', 'disabled_tools', 'includeTools', 'excludeTools', 'allowedTools', 'blockedTools', 'disabledTools']
+const authentication = ['oauth', 'auth', 'authorization', 'authProvider', 'authProviderType', 'oauth_client_id', 'http_headers_helper', 'bearerToken', 'accessToken', 'clientSecret']
+const approvalFlags = ['trust', 'requiresApproval']
+const approvalLists = ['autoApprove', 'alwaysAllow']
+const providerRequired = (providerOnly, message) => Object.assign(fail('CAPABILITY_UNAVAILABLE', message), { providerOnly })
 
-function normalize(server, format, resolveEnv = false) {
+function normalize(server, format, serverKey, resolveEnv = false) {
   if (!plain(server)) throw fail('INVALID_CONFIG', 'Server definition must be an object.')
-  const declared = JSON.stringify(server)
-  if (declared.includes('${') || (format === 'gemini' && /\$[a-z_]/i.test(declared))) {
-    throw fail('CAPABILITY_UNAVAILABLE', 'Environment placeholders require this provider’s native connector.')
+  if ((server.enabled !== undefined && typeof server.enabled !== 'boolean') || (server.disabled !== undefined && typeof server.disabled !== 'boolean')) {
+    throw fail('INVALID_CONFIG', 'Invalid server enablement setting.')
   }
   if (server.enabled === false || server.disabled === true) throw fail('CAPABILITY_UNAVAILABLE', 'Disabled in the source configuration.')
-  if (restrictions.some((key) => key in server)) throw fail('CAPABILITY_UNAVAILABLE', 'Per-tool restrictions require this provider’s native connector.')
-  if (['oauth', 'auth', 'authorization', 'authProvider', 'authProviderType', 'oauth_client_id', 'http_headers_helper', 'bearerToken', 'accessToken', 'clientSecret'].some((key) => key in server)) {
-    throw fail('CAPABILITY_UNAVAILABLE', 'Provider-managed authentication requires a native connector.')
-  }
-  if (server.type === 'sse' || server.transport === 'sse' || (format === 'gemini' && server.url && !server.httpUrl)) {
-    throw fail('CAPABILITY_UNAVAILABLE', 'Legacy SSE transport requires a native connector.')
-  }
-  // A native provider may enforce security or execution semantics on an option
-  // the shared client cannot interpret. Only import options we can honor.
-  const urlField = format === 'gemini' ? 'httpUrl' : format === 'antigravity' && server.serverUrl !== undefined ? 'serverUrl' : 'url'
+  const urlField = format === 'gemini' && server.httpUrl !== undefined ? 'httpUrl' : format === 'antigravity' && server.serverUrl !== undefined ? 'serverUrl' : 'url'
   const url = server[urlField]
+  if (server.command !== undefined && url !== undefined) throw fail('INVALID_CONFIG', 'Ambiguous server transport.')
+  if (server.headers !== undefined && server.http_headers !== undefined) throw fail('INVALID_CONFIG', 'Ambiguous HTTP headers.')
   const transport = server.command ? 'stdio' : 'http'
+  const legacy = transport === 'http' && (server.type === 'sse' || server.transport === 'sse' || (format === 'gemini' && urlField === 'url' && url))
   for (const declared of [server.type, server.transport]) {
-    if (declared !== undefined && declared !== transport && !(transport === 'http' && ['streamableHttp', 'streamable-http'].includes(declared))) {
-      throw fail('CAPABILITY_UNAVAILABLE', 'The declared transport requires this provider’s native connector.')
+    if (declared !== undefined && declared !== transport && !(transport === 'http' && ['streamableHttp', 'streamable-http'].includes(declared)) && !(legacy && declared === 'sse')) {
+      throw fail('CAPABILITY_UNAVAILABLE', 'Unsupported or inconsistent transport declaration.')
     }
   }
   const keys = transport === 'stdio' ? ['command', 'args', 'env', 'cwd', 'env_vars'] : [urlField, 'headers', 'http_headers', 'env_http_headers', 'bearer_token_env_var']
-  const supported = new Set(['type', 'transport', 'enabled', 'disabled', ...keys])
+  const supported = new Set(['type', 'transport', 'enabled', 'disabled', ...keys, ...restrictions, ...authentication, ...approvalFlags, ...approvalLists])
   if (format === 'codex') { supported.add('startup_timeout_sec'); supported.add('tool_timeout_sec') }
   if (format === 'gemini') supported.add('timeout')
   if (Object.keys(server).some(key => !supported.has(key))) {
     throw fail('CAPABILITY_UNAVAILABLE', 'This provider has additional server options the shared runner cannot apply.')
   }
-  if ((server.enabled !== undefined && typeof server.enabled !== 'boolean') || (server.disabled !== undefined && typeof server.disabled !== 'boolean')) {
-    throw fail('INVALID_CONFIG', 'Invalid server enablement setting.')
+  for (const field of [...restrictions, ...approvalLists]) {
+    if (field in server && (!Array.isArray(server[field]) || !server[field].every(value => typeof value === 'string'))) throw fail('INVALID_CONFIG', 'Invalid provider tool policy.')
   }
-  if (server.headers !== undefined && server.http_headers !== undefined) throw fail('INVALID_CONFIG', 'Ambiguous HTTP headers.')
-  if (server.command && url) throw fail('INVALID_CONFIG', 'Ambiguous server transport.')
+  if (approvalFlags.some(key => key in server && typeof server[key] !== 'boolean')) throw fail('INVALID_CONFIG', 'Invalid provider approval setting.')
+  for (const field of authentication) {
+    if (!(field in server)) continue
+    const value = server[field]
+    const structured = ['oauth', 'auth', 'authorization', 'authProvider', 'http_headers_helper'].includes(field)
+    if (!(typeof value === 'string' && value.trim()) && !(structured && plain(value))) throw fail('INVALID_CONFIG', 'Invalid provider authentication setting.')
+  }
+  const hasPlaceholder = text => text.includes('${') || (format === 'gemini' && /\$[a-z_]/i.test(text))
   const normalized = {}
   for (const [field, target, scale] of [['startup_timeout_sec', 'startupTimeoutMs', 1000], ['tool_timeout_sec', 'requestTimeoutMs', 1000], ['timeout', 'requestTimeoutMs', 1]]) {
     if (server[field] === undefined) continue
@@ -112,7 +114,6 @@ function normalize(server, format, resolveEnv = false) {
   }
   if (server.command) {
     if (typeof server.command !== 'string' || server.command.includes('\0')) throw fail('INVALID_CONFIG', 'Invalid server command.')
-    if (['node_repl', 'SkyComputerUseClient'].includes(basename(server.command))) throw fail('CAPABILITY_UNAVAILABLE', 'Provider-internal tools require their native connector.')
     if (server.args !== undefined && (!Array.isArray(server.args) || !server.args.every((arg) => typeof arg === 'string' && !arg.includes('\0')))) {
       throw fail('INVALID_CONFIG', 'Invalid server arguments.')
     }
@@ -132,9 +133,12 @@ function normalize(server, format, resolveEnv = false) {
     if (server.cwd) normalized.cwd = server.cwd
   } else if (url) {
     if (typeof url !== 'string') throw fail('INVALID_CONFIG', 'Invalid server URL.')
-    let parsed
-    try { parsed = new URL(url) } catch { throw fail('INVALID_CONFIG', 'Invalid server URL.') }
-    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw fail('CAPABILITY_UNAVAILABLE', 'This URL needs a native connector.')
+    // A placeholder can occupy the whole endpoint; only the source host can expand it.
+    if (!hasPlaceholder(url)) {
+      let parsed
+      try { parsed = new URL(url) } catch { throw fail('INVALID_CONFIG', 'Invalid server URL.') }
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw fail('CAPABILITY_UNAVAILABLE', 'Unsupported server URL.')
+    }
     const headers = server.http_headers ?? server.headers ?? {}
     if (!stringMap(headers) || Object.entries(headers).some(([key, value]) => /[\r\n]/.test(key + value))) throw fail('INVALID_CONFIG', 'Invalid HTTP headers.')
     if (server.bearer_token_env_var !== undefined && (typeof server.bearer_token_env_var !== 'string' || !server.bearer_token_env_var)) throw fail('INVALID_CONFIG', 'Invalid bearer environment declaration.')
@@ -154,6 +158,14 @@ function normalize(server, format, resolveEnv = false) {
       if (Object.entries(normalized.headers).some(([key, value]) => /[\r\n]/.test(key + value))) throw fail('INVALID_CONFIG', 'Invalid resolved HTTP headers.')
     }
   } else throw fail('CAPABILITY_UNAVAILABLE', 'No supported stdio or HTTP transport is configured.')
+  if (isNativeTool(serverKey) || (normalized.command && ['node_repl', 'SkyComputerUseClient'].includes(basename(normalized.command)))) {
+    throw providerRequired('native-tool', 'Provider-internal tools require their native connector.')
+  }
+  if (restrictions.some(key => key in server)) throw providerRequired('tool-policy', 'Per-tool restrictions require this provider’s native connector.')
+  if (authentication.some(key => key in server)) throw providerRequired('provider-auth', 'Provider-managed authentication requires a native connector.')
+  if ([...approvalFlags, ...approvalLists].some(key => key in server)) throw providerRequired('provider-options', 'Provider approval settings require a native connector.')
+  if (legacy) throw providerRequired('transport', 'Legacy SSE transport requires a native connector.')
+  if (hasPlaceholder(JSON.stringify(server))) throw providerRequired('environment', 'Environment placeholders require this provider’s native connector.')
   return normalized
 }
 
@@ -243,17 +255,19 @@ export async function scanCatalog({ home = homedir() } = {}) {
       continue
     }
     for (const [serverKey, server] of Object.entries(servers).slice(0, 300)) {
-      if (nativeNames.has(serverKey.toLowerCase())) continue
       const name = clean(serverKey, 100)
       if (!name) continue
-      let normalized, reason
-      try { normalized = normalize(server, format) } catch (error) { reason = error.code ? error.message : 'Unsupported server configuration.' }
+      let normalized, reason, providerOnly
+      try { normalized = normalize(server, format, serverKey) } catch (error) {
+        reason = error.code ? error.message : 'Unsupported server configuration.'
+        providerOnly = error.providerOnly
+      }
       const fingerprint = hash(stable(server))
       const signature = normalized ? stable([name.toLowerCase(), mcpComparisonFields(server, normalized)]) : `${configPath}:${serverKey}`
       const duplicate = mcpItems.get(signature)
       if (duplicate) { if (!duplicate.providers.includes(provider)) duplicate.providers.push(provider); continue }
       const id = `mcp:${hash(`${configPath}\0${serverKey}`).slice(0, 24)}`
-      const item = { id, kind: 'mcp', name, description: 'Tools are discovered only when you request this server.', providers: [provider], source: relative, available: !reason, ...(reason ? { reason } : {}) }
+      const item = { id, kind: 'mcp', name, description: 'Tools are discovered only when you request this server.', providers: [provider], source: relative, available: !reason, ...(reason ? { reason } : {}), ...(providerOnly ? { providerOnly } : {}) }
       items.push(item); mcpItems.set(signature, item)
       records.set(id, { id, name, kind: 'mcp', configPath, format, serverKey, fingerprint })
     }
@@ -275,7 +289,7 @@ export async function resolveRecord(record) {
       return { path }
     } catch (error) { if (['CAPABILITY_CHANGED', 'CAPABILITY_UNAVAILABLE'].includes(error.code)) throw error; throw fail('CAPABILITY_UNAVAILABLE', 'This skill is no longer readable.') }
   }
-  return normalize(await readMcpSource(record), record.format, true)
+  return normalize(await readMcpSource(record), record.format, record.serverKey, true)
 }
 
 async function readMcpSource(record) {
@@ -304,5 +318,5 @@ function mcpComparisonFields(server, config) {
 }
 export async function inspectMcpFields(record) {
   const server = await readMcpSource(record)
-  return mcpComparisonFields(server, normalize(server, record.format))
+  return mcpComparisonFields(server, normalize(server, record.format, record.serverKey))
 }

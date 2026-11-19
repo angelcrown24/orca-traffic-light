@@ -12,6 +12,7 @@ declare module 'orca' {
     'toolbox.prepare': { input: { workspaceId: string }; output: ToolboxState }
     'toolbox.revoke': { input: { workspaceId: string; bundleId: string }; output: ToolboxState }
     'toolbox.copy': { input: { workspaceId: string; bundleId: string }; output: { copied: boolean } }
+    'toolbox.copyAdaptation': { input: { workspaceId: string; id: string; language: 'en' | 'ko' }; output: { copied: boolean; prompt: string } }
     'toolbox.automation': { input: { workspaceId: string; enabled: boolean }; output: ToolboxState }
     'toolbox.compare': { input: { id: string }; output: ToolboxComparison }
     'toolbox.sync': { input: { workspaceId: string; ids: string[]; preserveProviderCopies?: boolean }; output: { results: SyncResult[]; catalog: ToolboxCatalog } }

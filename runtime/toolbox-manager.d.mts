@@ -15,6 +15,7 @@ export function createToolboxManager(options: {
   prepare(input: { workspaceId: string }): Promise<ToolboxState>
   revoke(input: { workspaceId: string; bundleId: string }): Promise<ToolboxState>
   copy(input: { workspaceId: string; bundleId: string }): Promise<{ copied: boolean }>
+  copyAdaptation(input: { workspaceId: string; id: string; language: 'en' | 'ko' }): Promise<{ copied: boolean; prompt: string }>
   initialize(): Promise<void>
   setAutomation(input: { workspaceId: string; enabled: boolean }): Promise<ToolboxState>
   compare(input: { id: string }): Promise<ToolboxComparison>

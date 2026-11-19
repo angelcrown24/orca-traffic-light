@@ -396,6 +396,7 @@ test('legacy provider selections can be removed independently, and incompatible 
     await view.press({ text: 'Review' })
     assert.equal(Boolean(view.find({ text: blocked.reason! })), true)
     assert.equal(view.find({ text: 'Add' }), null)
+    assert.equal(view.find({ text: 'Copy adaptation request' }), null)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })

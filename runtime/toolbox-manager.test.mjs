@@ -27,6 +27,67 @@ function deferred() {
   return { promise, resolve }
 }
 
+test('adaptation copies only verified source metadata and returns the localized prompt if copying fails', async t => {
+  const original = { id: 'mcp:' + 'a'.repeat(24), kind: 'mcp', name: 'maps', providers: ['Claude Code'],
+    available: false, source: '.claude.json', providerOnly: 'provider-auth',
+    description: 'private instructions', reason: 'private token', skillRequirements: 'private requirements' }
+  const sibling = { ...original, id: 'mcp:' + 'b'.repeat(24), source: '/private/provider.json',
+    providers: ['Codex'], providerOnly: 'tool-policy' }
+  let items = [original, sibling], copied = []
+  const command = { workspaceId: 'ws', id: original.id, language: 'en' }
+  const manager = createToolboxManager({
+    getContext: async () => ({ workspaceId: 'ws' }),
+    scan: async () => ({ items, warnings: [], records: new Map([[original.id, { command: 'private command' }]]) }),
+    clipboard: async text => { copied.push(text); if (copied.length === 2) throw Error('no clipboard'); return true }
+  })
+  t.after(() => manager.dispose())
+  const en = await manager.copyAdaptation(command)
+  assert.deepEqual(en, { copied: true, prompt: copied[0] })
+  for (const fact of ['maps', 'Claude Code', '.claude.json', 'Authentication', 'MCP server', 'unverified']) assert.ok(en.prompt.includes(fact))
+  assert.doesNotMatch(en.prompt, /private|Codex/)
+  const ko = await manager.copyAdaptation({ ...command, id: sibling.id, language: 'ko' })
+  assert.deepEqual(ko, { copied: false, prompt: copied[1] })
+  for (const fact of ['maps', 'Codex', '도구를 제한', '미검증', '테스트']) assert.ok(ko.prompt.includes(fact))
+  assert.doesNotMatch(ko.prompt, /private|Claude Code|\.claude\.json/)
+
+  items = [{ ...original, name: '@org/tool-name' }]
+  assert.match((await manager.copyAdaptation(command)).prompt, /"@org\/tool-name"/)
+  items = [{ ...original, name: 'https://private.invalid/token' }]
+  const redacted = (await manager.copyAdaptation(command)).prompt
+  assert.ok(redacted.includes(original.id))
+  assert.doesNotMatch(redacted, /private|https:/)
+
+  // A previous catalog view or a same-name source cannot authorize an obsolete copy request.
+  for (const replacement of [{ ...original, available: true }, { ...original, providerOnly: undefined },
+    { ...original, providerOnly: 'toString' }, sibling]) {
+    items = [replacement]
+    await assert.rejects(manager.copyAdaptation(command), /source changed/)
+  }
+  await assert.rejects(manager.copyAdaptation({ ...command, workspaceId: 'elsewhere' }), /Workspace changed/)
+  await assert.rejects(manager.copyAdaptation({ ...command, language: 'unsupported' }), /Invalid adaptation/)
+  assert.equal(copied.length, 4)
+})
+
+test('a changed workspace during adaptation discovery prevents copying', async t => {
+  let focused = 'first', copies = 0
+  const entered = deferred(), release = deferred()
+  const manager = createToolboxManager({
+    getContext: async () => ({ workspaceId: focused }),
+    scan: async () => {
+      entered.resolve(); await release.promise
+      return { items: [{ id: 'skill-one', kind: 'skill', name: 'review', available: false, providerOnly: 'explicit-invocation', providers: ['Codex'] }] }
+    },
+    clipboard: async () => { copies++; return true }
+  })
+  t.after(() => manager.dispose())
+  const copying = manager.copyAdaptation({ workspaceId: 'first', id: 'skill-one', language: 'en' })
+  await entered.promise
+  focused = 'second'
+  release.resolve()
+  await assert.rejects(copying, /Workspace changed/)
+  assert.equal(copies, 0)
+})
+
 test('opening state and browsing metadata never starts an MCP service', async () => {
   const f = fixture()
   assert.deepEqual((await f.manager.state()).selected, [])

@@ -1,3 +1,4 @@
+export type ProviderOnlyReason = 'skill-execution' | 'explicit-invocation' | 'native-tool' | 'provider-auth' | 'tool-policy' | 'transport' | 'provider-options' | 'environment'
 export type CatalogItem = {
   id: string
   kind: 'skill' | 'mcp'
@@ -6,6 +7,7 @@ export type CatalogItem = {
   providers: string[]
   source: string
   available: boolean
+  providerOnly?: ProviderOnlyReason
   reason?: string
   skillRequirements?: string
   sharing?: { state: 'provider' | 'shared' | 'update' | 'conflict'; canSync: boolean; detail?: string }

@@ -18,6 +18,12 @@ Traffic Light scans local user configuration. Each provider badge identifies whe
 
 Discovery deduplicates canonical skill paths and equivalent MCP configurations. The importer groups entries by type and name and lets you compare source differences before choosing. Commands, URLs, environment values, and credentials stay out of the panel. The skill scan skips instruction files larger than 64 KiB and applies traversal limits. It covers local user directories. Project-specific MCP settings, provider plugin caches, and remote hosts fall outside this scan.
 
+### Before importing a provider-specific source
+
+Traffic Light checks the selected source for recognized runtime dependencies and restrictions. A skill might request a provider’s hooks or require explicit invocation. An MCP server might rely on provider-managed authentication, per-tool access rules or a transport the shared runner cannot use. In a group with several sources, each copy is assessed individually. The provider shown on an entry identifies where it was discovered.
+
+**Copy adaptation request** prepares an English or Korean handoff for the agent that will implement the alternative. It identifies the selected source and explains the limitation. Copying is a clipboard action. You choose the receiving conversation and paste the request yourself. The receiving agent needs to inspect the original declarations, preserve the permissions and invocation rules, and try a representative operation in the target environment. Compatibility remains unverified until tested. The importer can recognize declared constraints, but it cannot determine every dependency embedded in prose, scripts or external services.
+
 ### Skill packages
 
 Importing a skill copies its supporting files into a versioned shared snapshot. The path `~/.agents/skills/<name>` points to the current shared version. Missing provider entries can link to it. Existing provider packages and earlier snapshots are preserved. A change in the source appears as an update for explicit synchronization. The importer reports conflicting destinations for review.

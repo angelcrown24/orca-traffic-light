@@ -1,5 +1,6 @@
 import { atom, Badge, Box, Button, Callout, Checkbox, CodeView, Collapsible, EmptyState, env, Heading, IconButton, Input, on, plugin, read, RelativeTime, Row, Separator, set, Stack, Switch, Text, type PanelContext } from 'orca'
 import { panelLanguage } from './panel-language'
+import { clearAdaptation, limitationLabel, ProviderAdaptation } from './provider-adaptation'
 import type { CatalogItem, SyncResult, ToolboxCatalog, ToolboxState } from './toolbox-types'
 import './protocol'
 import { ArchitectureDiagram } from './toolbox-architecture'
@@ -154,14 +155,14 @@ async function changeAutomation(enabled: boolean): Promise<void> {
 }
 async function importSource(group: SourceGroup, id: string): Promise<void> {
   const current = read(state)
-  if (!current.workspaceId || read(busy) || !group.items.some(item => item.id === id && item.available && item.sharing?.canSync)) return
+  if (!current.workspaceId || read(busy) || !group.items.some(item => item.id === id && item.available && !item.providerOnly && item.sharing?.canSync)) return
   const request = ++epoch
   set(busy, true); set(failure, ''); set(syncResults, []); set(copyStatus, 'idle')
   try {
     const result = await plugin.request('toolbox.sync', { workspaceId: current.workspaceId, ids: [id], preserveProviderCopies: true })
     if (request !== epoch) return
     set(catalog, result.catalog); set(syncResults, result.results); resetImportReviews()
-    if (result.results.some(row => row.id === id && (row.status === 'synced' || row.status === 'unchanged'))) {
+    if (!group.items.some(item => item.providerOnly) && result.results.some(row => row.id === id && (row.status === 'synced' || row.status === 'unchanged'))) {
       set(receipts, [...read(receipts).filter(row => row.key !== group.key), group])
     }
     try {
@@ -195,20 +196,22 @@ function Item({ item }: { item: CatalogItem }) {
   const source = providers.length ? `${providers[0]}${providers.length > 1 ? ` +${providers.length - 1}` : ''}` : t.shared
   return <Box direction="column" gap="xs" padding="sm" background={current.selected.includes(item.id) ? 'muted' : 'none'}>
     <Row align="center" justify="between" gap="xs">
-      <Box grow minWidth={0}><Checkbox label={item.name} checked={current.selected.includes(item.id)} disabled={!current.workspaceId || read(busy) || (!current.selected.includes(item.id) && (!item.available || current.selected.length >= 24))} onChange={checked => changeSelection(checked ? [...current.selected, item.id] : current.selected.filter(id => id !== item.id))} /></Box>
-      <IconButton icon={expanded ? 'collapse' : 'expand'} label={`${t.detailsFor}: ${item.name}`} tooltip={t.details} variant="ghost" size="sm" onPress={() => set(expandedItem, expanded ? null : item.id)} />
+      <Box grow minWidth={0}><Checkbox label={item.name} checked={current.selected.includes(item.id)} disabled={!current.workspaceId || read(busy) || (!current.selected.includes(item.id) && (!item.available || !!item.providerOnly || current.selected.length >= 24))} onChange={checked => changeSelection(checked ? [...current.selected, item.id] : current.selected.filter(id => id !== item.id))} /></Box>
+      <IconButton icon={expanded ? 'collapse' : 'expand'} label={`${t.detailsFor}: ${item.name}`} tooltip={t.details} variant="ghost" size="sm" onPress={() => { clearAdaptation(); set(expandedItem, expanded ? null : item.id) }} />
     </Row>
     <Row justify="between" align="center" gap="xs">
       <Box grow minWidth={0}><Text muted size="xs" truncate>{`${item.kind === 'skill' ? t.skill : 'MCP'} · ${source}`}</Text></Box>
-      {!item.available ? <Badge tone="warning">{t.unavailable}</Badge> : item.sharing?.state === 'conflict' || item.sharing?.state === 'update' ? <Badge tone="warning">{item.sharing.state === 'conflict' ? t.conflict : t.update}</Badge> : item.sharing ? <Text muted size="xs">{item.sharing.state === 'shared' ? t.shared : t.providerOnly}</Text> : null}
+      {item.providerOnly || !item.available ? <Badge tone="warning">{limitationLabel([item]) ?? t.unavailable}</Badge> : item.sharing?.state === 'conflict' || item.sharing?.state === 'update' ? <Badge tone="warning">{item.sharing.state === 'conflict' ? t.conflict : t.update}</Badge> : item.sharing ? <Text muted size="xs">{item.sharing.state === 'shared' ? t.shared : t.providerOnly}</Text> : null}
     </Row>
     {expanded ? <Stack gap="sm">
       <Text size="sm" muted>{item.description || t.noDescription}</Text>
       <Text muted size="xs">{`${t.foundIn}: ${item.providers.join(' · ')}`}</Text>
       <Text muted size="xs">{`${t.source}: ${item.source}`}</Text>
-      {item.skillRequirements ? <Text size="xs" muted>{(t === copy.ko ? '필요 환경 · ' : 'Requires · ') + item.skillRequirements}</Text> : null}
-      {item.reason ? <Text size="sm" tone="warning">{item.reason}</Text> : null}
-      {item.sharing?.detail ? <Text size="sm" muted>{item.sharing.detail}</Text> : null}
+      {item.skillRequirements && !item.providerOnly ? <Text size="xs" muted>{(t === copy.ko ? '필요 환경 · ' : 'Requires · ') + item.skillRequirements}</Text> : null}
+      {item.providerOnly ? <ProviderAdaptation item={item} workspaceId={current.workspaceId} disabled={read(busy)} /> : <Stack gap="xs">
+        {item.reason ? <Text size="sm" tone="warning">{item.reason}</Text> : null}
+        {item.sharing?.detail ? <Text size="sm" muted>{item.sharing.detail}</Text> : null}
+      </Stack>}
     </Stack> : null}
   </Box>
 }
@@ -311,7 +314,7 @@ export function ToolboxPanel() {
       : visible.length ? <Box direction="column" gap="none" border radius="sm">{visible.map((group, index) => <Stack key={group.key} gap="none">
         {index ? <Separator /> : null}
         {importing && (!index || sectionTitle(visible[index - 1]) !== sectionTitle(group)) ? <Box padding="sm" background="muted"><Text size="xs" weight="semibold">{sectionTitle(group)}</Text></Box> : null}
-        {importing ? <ImportRow group={group} added={completed.has(group.key)} disabled={!current.workspaceId || read(busy)} add={id => importSource(group, id)} /> : <StoreRow group={group} />}
+        {importing ? <ImportRow group={group} workspaceId={current.workspaceId} added={completed.has(group.key)} disabled={!current.workspaceId || read(busy)} add={id => importSource(group, id)} /> : <StoreRow group={group} />}
       </Stack>)}</Box>
       : search || read(kind) !== 'all' || (!importing && onlySelected) ? <EmptyState icon="search" title={t.noMatch} description={t.noMatchHelp} />
       : importing ? <EmptyState icon="check" title={ko ? '가져올 항목이 없습니다' : 'Nothing to import'} />

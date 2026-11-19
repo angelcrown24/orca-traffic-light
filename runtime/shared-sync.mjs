@@ -4,6 +4,8 @@ import { chmod, lstat, mkdir, open, readdir, readlink, realpath, rename, rm, sym
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
+import { skillPortability } from './skill-portability.mjs'
+
 const digest = value => createHash('sha256').update(value).digest('hex')
 const failure = message => Object.assign(new Error(message), { code: 'SYNC_CONFLICT' })
 const missing = async path => lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error })
@@ -77,7 +79,7 @@ export async function decorateSharing(catalog, home = homedir()) {
   for (const item of catalog.items) item.sharing = {
     state: item.kind === 'skill' && item.providers.includes('Shared') ? 'shared' : 'provider',
     canSync: item.available,
-    ...(!item.available ? { detail: 'This capability requires its native connector.' } : {})
+    ...(!item.available ? { detail: item.reason } : {})
   }
   let registry
   try { registry = await readSharedRegistry(home) } catch (error) { catalog.warnings.push(error.message); return catalog }
@@ -91,14 +93,20 @@ export async function decorateSharing(catalog, home = homedir()) {
     let state = 'shared', detail
     try {
       if (await realpath(canonical) !== entry.snapshot || (await inspectSkillPackage(entry.snapshot)).stamp !== entry.snapshotStamp) throw new Error()
-      if ((await inspectSkillPackage(entry.sourcePath)).stamp !== entry.sourceStamp) { state = 'update'; detail = 'The original package changed. Synchronize explicitly to publish a new shared version.' }
+      if ((await inspectSkillPackage(entry.sourcePath)).stamp !== entry.sourceStamp) {
+        if (!origin?.available) {
+          state = 'conflict'; detail = 'The updated source cannot be shared. The existing shared copy was preserved.'
+        } else {
+          state = 'update'; detail = 'The original package changed. Synchronize explicitly to publish a new shared version.'
+        }
+      }
     } catch { state = 'conflict'; detail = 'A shared package or its source changed location. Existing files were preserved.' }
     item.sharing = { state, canSync: item.available && state !== 'conflict', ...(detail ? { detail } : {}) }
     const record = catalog.records.get(item.id)
     record.syncKey = slug
     if (shared) {
       record.packageRoot = entry.snapshot; record.packageFingerprint = entry.packageFingerprint
-      if (origin && origin !== shared) { hidden.add(origin.id); for (const provider of origin.providers) if (!shared.providers.includes(provider)) shared.providers.push(provider) }
+      if (origin?.available && origin !== shared) { hidden.add(origin.id); for (const provider of origin.providers) if (!shared.providers.includes(provider)) shared.providers.push(provider) }
     }
   }
   catalog.items = catalog.items.filter(item => !hidden.has(item.id))
@@ -141,6 +149,13 @@ const slugFor = record => {
   return name
 }
 
+async function checkPortablePackage(root) {
+  const path = join(root, 'SKILL.md')
+  const content = (await bytes(path, 64 * 1024)).toString('utf8')
+  const portability = await skillPortability(content, path)
+  if (!portability.available) throw failure(portability.reason)
+}
+
 async function syncSkill(record, registry, home, preserveProviderCopies) {
   const slug = record.syncKey ?? slugFor(record), previous = Object.hasOwn(registry.skills, slug) ? registry.skills[slug] : undefined
   if (previous && !record.syncKey) throw failure('A different source is already registered under this name. Compare it with the shared copy.')
@@ -167,6 +182,7 @@ async function syncSkill(record, registry, home, preserveProviderCopies) {
     destinations.push(destination)
   }
   if (existingCommon) {
+    await checkPortablePackage(source.root)
     const created = []
     try {
       for (const destination of destinations) await linkMissing(destination, canonical, created)
@@ -180,6 +196,7 @@ async function syncSkill(record, registry, home, preserveProviderCopies) {
   const exists = await missing(snapshot)
   if (exists) {
     if (exists.isSymbolicLink() || (await inspectSkillPackage(snapshot, true)).fingerprint !== source.fingerprint) throw failure('The stored shared version has changed. Nothing was overwritten.')
+    await checkPortablePackage(snapshot)
   } else {
     const stage = join(base, '.staging-' + randomUUID())
     await mkdir(stage, { mode: 0o700 })
@@ -192,6 +209,7 @@ async function syncSkill(record, registry, home, preserveProviderCopies) {
       }
       for (const entry of [...source.entries].reverse()) if (entry.kind === 'directory') await chmod(join(stage, entry.path), entry.mode)
       if ((await inspectSkillPackage(source.root)).stamp !== source.stamp) throw failure('The source changed during synchronization. Try again after editing finishes.')
+      await checkPortablePackage(stage)
       await rename(stage, snapshot)
     } catch (error) { await rm(stage, { recursive: true, force: true }); throw error }
   }
@@ -225,13 +243,13 @@ export async function syncCapabilities({ ids, home = homedir(), preserveProvider
   const lock = join(directory, 'shared-sync.lock')
   try { await mkdir(lock, { mode: 0o700 }) } catch { throw new Error('Synchronization is locked. If an earlier attempt crashed, remove the shared-sync.lock folder under ~/.agents/traffic-light after confirming no sync is running.') }
   try {
-    const { scanCatalog } = await import('./catalog.mjs')
+    const { inspectMcpFields, scanCatalog } = await import('./catalog.mjs')
     const catalog = await scanCatalog({ home }), registry = await readSharedRegistry(home), results = []
     for (const id of [...new Set(ids)]) {
       const item = catalog.items.find(item => item.id === id), record = catalog.records.get(id)
       if (!item || !record) { results.push({ id, name: 'Unavailable capability', status: 'failed', message: 'The item changed. Refresh the library.' }); continue }
       try {
-        if (!item.available) throw failure('This capability requires its native connector and cannot be synchronized.')
+        if (!item.available || !item.sharing.canSync) throw failure(item.reason || item.sharing.detail || 'This capability cannot be synchronized.')
         if (record.kind === 'skill') results.push({ id, name: item.name, ...await syncSkill(record, registry, home, preserveProviderCopies === true) })
         else {
           if (preserveProviderCopies === true && !Object.hasOwn(registry.mcp, id)) {
@@ -239,6 +257,8 @@ export async function syncCapabilities({ ids, home = homedir(), preserveProvider
               pin.name?.toLowerCase() === item.name.toLowerCase() && catalog.records.has(pin.id))
             if (taken) throw failure('Another source with this name is already shared. Refresh the library to compare them.')
           }
+          // The source may change while an earlier item in this batch is being synchronized.
+          await inspectMcpFields(record)
           const pin = { id, name: record.name, kind: 'mcp', configPath: record.configPath, format: record.format, serverKey: record.serverKey, fingerprint: record.fingerprint }
           const unchanged = registry.mcp[id]?.fingerprint === pin.fingerprint
           await saveRegistry(home, { ...registry, mcp: { ...registry.mcp, [id]: pin } }); registry.mcp[id] = pin

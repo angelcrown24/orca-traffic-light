@@ -1,5 +1,11 @@
 # Release history
 
+## [v0.8.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.8.0) · Review provider-specific sources before import
+
+- Import identifies recognized provider requirements and explains which part the shared runner cannot reproduce.
+- Copy a request for a target agent to build and test a compatible alternative. The request is available in English and Korean.
+- When several providers have the same item, the import decision applies to the individual source. Compatible copies remain available.
+
 ## [v0.7.2](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.7.2) · English fallback and visual setup guide
 
 - Activity, Library and How it works follow Orca's language. Korean locales use Korean. English, other languages and an unspecified locale use English.

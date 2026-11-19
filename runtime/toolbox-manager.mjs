@@ -3,6 +3,7 @@ import { scanCatalog, resolveRecord } from './catalog.mjs'
 import { createToolboxService } from './service.mjs'
 import { writeBundle } from './bundle-store.mjs'
 import { copyText } from './clipboard.mjs'
+import { adaptationPrompt } from './provider-adaptation.mjs'
 import { createAutomation } from './automation.mjs'
 import { syncCapabilities } from './shared-sync.mjs'
 
@@ -336,5 +337,16 @@ export function createToolboxManager({ getContext, getWorkspaces, post, loadSele
     if (!current.bundle || current.bundle.id !== bundleId) error('The prepared bundle changed. Refresh before copying.')
     return { copied: await clipboard(current.bundle.instructions) }
   }
-  return { catalog, activity, state, select, prepare, revoke, copy, initialize, setAutomation, sync, compare, dispose }
+  async function copyAdaptation({ workspaceId, id, language }) {
+    assertWorkspace(workspaceId)
+    if (typeof id !== 'string' || !id || id.length > 180 || (language !== 'ko' && language !== 'en')) error('Invalid adaptation request.')
+    await context(workspaceId)
+    const data = await scanNow(true)
+    const prompt = adaptationPrompt(data.items.find(item => item.id === id), language)
+    await context(workspaceId)
+    let copied = false
+    try { copied = await clipboard(prompt) === true } catch { /* The panel can still show the prompt for manual copying. */ }
+    return { copied, prompt }
+  }
+  return { catalog, activity, state, select, prepare, revoke, copy, copyAdaptation, initialize, setAutomation, sync, compare, dispose }
 }

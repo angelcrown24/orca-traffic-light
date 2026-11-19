@@ -46,6 +46,15 @@ For example, you can make a skill installed for Claude Code available to Codex i
 3. Press **Connect**. Traffic Light installs shared instructions and a local launcher. Agents that load those instructions can search the selection, read a skill, or call a tool on demand. Browsing the library starts no MCP servers.
 4. After changing a selection, press **Apply selection**. New connections use the updated selection. For an existing conversation that has not loaded the instructions, open **Connection settings → Manual connection** to prepare a guide for that conversation.
 
+If an entry says **Provider-specific** or **Compatibility review**, expand it in **Import** to see what prevents sharing. Choose **Copy adaptation request** and paste it into the agent where you want to use the capability. The request asks the agent to build a separate version if feasible and report what worked in the target environment. Compatibility is unverified until then. A portable skill or tool installed for just one provider can still be added normally.
+
+<details>
+<summary>See a provider-specific skill in the Import view</summary>
+
+<a href="docs/images/provider-review-en.png"><img src="docs/images/provider-review-en.png" width="390" alt="An ordinary skill has an Add button. A Claude Code-only skill shows its runtime requirement and the Copy adaptation request button."></a>
+
+</details>
+
 The **How it works** tab shows the path from provider installations through the shared store to the workspace selection and active connections. Its counts distinguish skills from MCP servers. Expand either image for the full-size English example.
 
 | Library | How it works |

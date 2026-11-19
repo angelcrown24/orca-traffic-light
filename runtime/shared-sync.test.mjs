@@ -74,6 +74,34 @@ test('refuses a different provider destination before publishing any common pack
   await assert.rejects(lstat(join(f.home, '.agents/skills/sample')), { code: 'ENOENT' })
 })
 
+test('direct, bulk, and stale shared updates cannot publish a provider-only source', async t => {
+  const f = await fixture(t)
+  await f.put('.codex/skills/sample/SKILL.md', skill('sample'))
+  const original = (await f.scan()).items[0]
+  const registered = (await f.sync([original.id])).results[0]
+  const pinned = (await f.scan()).records.get(registered.newId)
+  const registry = await readSharedRegistry(f.home)
+  const sidecar = 'dependencies: {tools: [{type: mcp, value: codex_apps}]}'
+  await f.put('.codex/skills/sample/agents/openai.yaml', sidecar)
+  await f.put('.claude.json', { mcpServers: { restricted: { command: 'node', allowedTools: ['read'] }, portable: { command: 'node' } } })
+  const { items, records } = await f.scan()
+  const updated = items.find(item => item.id === original.id)
+  const old = items.find(item => item.id === registered.newId)
+  assert.equal(updated.providerOnly, 'native-tool')
+  assert.equal(updated.sharing.canSync, false)
+  assert.equal(old.sharing.state, 'conflict')
+  assert.equal(old.sharing.canSync, false)
+  await assert.rejects(resolveRecord(records.get(updated.id)), { code: 'CAPABILITY_UNAVAILABLE' })
+  const mcpId = name => items.find(item => item.name === name).id
+  const batch = await f.sync([updated.id, old.id, mcpId('restricted'), mcpId('portable')])
+  assert.deepEqual(batch.results.map(result => result.status), ['conflict', 'conflict', 'conflict', 'synced'])
+  const current = await readSharedRegistry(f.home)
+  assert.deepEqual(current.skills, registry.skills)
+  assert.deepEqual(Object.keys(current.mcp), [mcpId('portable')])
+  assert.equal((await resolveRecord(pinned)).path, pinned.path)
+  await assert.rejects(lstat(join(dirname(pinned.path), 'agents/openai.yaml')), { code: 'ENOENT' })
+})
+
 test('keeps user modifications to a shared snapshot and refuses external package symlinks', async t => {
   const f = await fixture(t)
   await f.put('.claude/skills/sample/SKILL.md', skill('sample'))

@@ -57,19 +57,26 @@ test('deduplicates equivalent servers while preserving disabled, restricted and 
   await f.put('.claude.json', { mcpServers: { shared: { type: 'stdio', command: 'node', args: ['same.mjs'] } } })
   await f.put('.gemini/settings.json', { mcpServers: {
     shared: { command: 'node', args: ['same.mjs'] },
-    disabled: { command: 'node', disabled: true },
+    disabled: { command: 'node', disabled: true, includeTools: ['read'] },
     restricted: { command: 'node', includeTools: ['read'] },
     oauth: { httpUrl: 'https://example.invalid/mcp', oauth: {} },
     legacy: { url: 'https://example.invalid/sse' },
-    node_repl: { command: 'node' }
+    node_repl: { command: 'node' },
+    internalAlias: { command: '/provider/SkyComputerUseClient' },
+    approval: { command: 'node', requiresApproval: true },
+    unknown: { command: 'node', undocumentedSetting: true }
   } })
   const { items, records } = await scanCatalog({ home: f.home })
   assert.equal(items.filter((item) => item.name === 'shared').length, 1)
   assert.deepEqual(items.find((item) => item.name === 'shared').providers, ['Claude Code', 'Gemini CLI'])
-  assert.equal(items.some((item) => item.name === 'node_repl'), false)
-  for (const name of ['disabled', 'restricted', 'oauth', 'legacy']) {
+  for (const [name, classification] of Object.entries({
+    disabled: undefined, restricted: 'tool-policy', oauth: 'provider-auth', legacy: 'transport', node_repl: 'native-tool',
+    internalAlias: 'native-tool', approval: 'provider-options', unknown: undefined
+  })) {
     const item = items.find((item) => item.name === name)
     assert.equal(item.available, false)
+    assert.equal(item.providerOnly, classification, name)
+    assert.equal(item.sharing.canSync, false)
     await assert.rejects(resolveRecord(records.get(item.id)), { code: 'CAPABILITY_UNAVAILABLE' })
   }
 })
@@ -119,6 +126,7 @@ test('bounds files, treats malformed definitions as unavailable and keeps parser
   const { items, warnings } = await scanCatalog({ home: f.home })
   assert.equal(items.length, 4)
   assert.equal(items.every((item) => !item.available), true)
+  assert.deepEqual(items.filter(item => item.providerOnly).map(item => [item.name, item.providerOnly]), [['placeholder', 'environment']])
   assert.equal(warnings.length, 2)
   assert.equal(JSON.stringify({ items, warnings }).includes('SECRET_IN_ERROR'), false)
   assert.equal(JSON.stringify({ items, warnings }).includes('SOME_SECRET'), false)

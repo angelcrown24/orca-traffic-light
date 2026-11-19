@@ -1,5 +1,6 @@
 import { atom, Badge, Box, Button, Collapsible, env, plugin, read, Row, set, Stack, Text } from 'orca'
 import { englishCount, panelLanguage } from './panel-language'
+import { clearAdaptation, limitationLabel, ProviderAdaptation } from './provider-adaptation'
 import type { CatalogItem, ToolboxComparison } from './toolbox-types'
 import './protocol'
 
@@ -46,6 +47,7 @@ export function resetImportReviews() {
 
 export function closeImportDetails() {
   generation++
+  clearAdaptation()
   set(expanded, null)
   set(comparison, null)
 }
@@ -66,9 +68,10 @@ export function needsImport(group: SourceGroup): boolean {
   return group.items.some(item => !isShared(item) || item.sharing?.state === 'update' || item.sharing?.state === 'conflict')
 }
 function canImport(item: CatalogItem): boolean {
-  return item.available && item.sharing?.canSync === true
+  return !item.providerOnly && item.available && item.sharing?.canSync === true
 }
 function actionOf(group: SourceGroup): Action {
+  if (group.items.every(item => item.providerOnly)) return 'review'
   if (group.items.length > 1 && group.items.some(isShared)) return 'compare'
   if (group.items.some(item => item.sharing?.state === 'update')) return 'update'
   if (!group.items.some(canImport)) return 'review'
@@ -88,14 +91,15 @@ function providers(items: CatalogItem[]): string {
 }
 async function openDetails(group: SourceGroup) {
   const request = ++generation
+  clearAdaptation()
   set(expanded, group.key)
-  if (group.items.length < 2) { set(comparison, null); return }
+  if (group.items.length < 2 || group.items.every(item => item.providerOnly)) { set(comparison, null); return }
   set(comparison, 'loading')
   try {
     const result = await plugin.request('toolbox.compare', { id: group.items[0].id })
     if (request !== generation) return
     set(comparison, result)
-    if (actionOf(group) !== 'compare' || group.items.some(item => item.sharing?.state === 'conflict' || item.sharing?.state === 'update')) return
+    if (actionOf(group) !== 'compare' || group.items.some(item => item.providerOnly || item.sharing?.state === 'conflict' || item.sharing?.state === 'update')) return
     const variant = (item: CatalogItem) => result.sources.find(source => source.id === item.id)?.variant
     const shared = new Set(group.items.filter(isShared).map(variant))
     if (group.items.some(item => variant(item) == null)) return
@@ -106,10 +110,10 @@ async function openDetails(group: SourceGroup) {
   }
 }
 type Add = (id: string) => Promise<void>
-function Sources({ group, disabled, add }: { group: SourceGroup; disabled: boolean; add: Add }) {
-  const t = labels(), result = read(comparison)
-  if (result === 'loading') return <Text muted size="sm">{t.checking}</Text>
-  if (result === 'error') return <Row gap="sm" align="center"><Text tone="warning" size="sm">{t.failed}</Text><Button size="sm" onPress={() => openDetails(group)}>{t.retry}</Button></Row>
+type SourceProps = { group: SourceGroup; workspaceId: string | null; disabled: boolean; add: Add }
+function Sources({ group, workspaceId, disabled, add }: SourceProps) {
+  const t = labels(), check = read(comparison)
+  const result = typeof check === 'string' ? null : check
   const sources = result?.sources ?? []
   const variant = (item: CatalogItem) => sources.find(source => source.id === item.id)?.variant
   const shared = group.items.filter(isShared)
@@ -117,14 +121,24 @@ function Sources({ group, disabled, add }: { group: SourceGroup; disabled: boole
   const verified = group.items.filter(item => variant(item) != null)
   const identical = group.items.length > 1 && verified.length === group.items.length && new Set(verified.map(variant)).size === 1
   return <Stack gap="sm">
+    {check === 'loading' ? <Text muted size="sm">{t.checking}</Text> : null}
+    {check === 'error' ? <Row gap="sm" align="center"><Text tone="warning" size="sm">{t.failed}</Text><Button size="sm" onPress={() => openDetails(group)}>{t.retry}</Button></Row> : null}
     {result?.differences.length ? <Text size="xs" muted>{t.diff + ' · ' + result.differences.map(field => t[field]).join(', ')}</Text> : identical ? <Text size="xs" muted>{t.identical}</Text> : null}
     {group.items.map(item => {
+      if (item.providerOnly) return <Box key={item.id} direction="column" padding="sm" gap="xs" radius="sm" background="muted">
+        {group.items.length > 1 ? <Stack gap="xs">
+          <Row align="center" justify="between" gap="xs" wrap><Text size="sm" weight="semibold">{providers([item]) || t.shared}</Text><Badge tone="warning">{limitationLabel([item])}</Badge></Row>
+          <Text size="xs" muted>{item.source}</Text>
+        </Stack> : null}
+        <ProviderAdaptation item={item} workspaceId={workspaceId} disabled={disabled} />
+      </Box>
+      if (check === 'loading' || check === 'error') return null
       const info = sources.find(source => source.id === item.id)
       const inLibrary = isShared(item)
       const same = info?.variant != null && sharedVariants.has(info.variant)
       const update = item.sharing?.state === 'update'
       const supported = canImport(item) && (!result || info?.variant != null)
-      const mayAdd = supported && (update || (!inLibrary && !shared.length && (!identical || item === group.items[0])))
+      const mayAdd = supported && (update || (!inLibrary && !shared.length && (!identical || item === group.items.find(canImport))))
       const provider = providers([item])
       const addLabel = provider && group.items.length > 1
         ? (t === words.ko ? provider + ' 원본 추가' : 'Add from ' + provider)
@@ -157,16 +171,17 @@ function Sources({ group, disabled, add }: { group: SourceGroup; disabled: boole
     })}
   </Stack>
 }
-export function ImportRow({ group, added, disabled, add }: { group: SourceGroup; added: boolean; disabled: boolean; add: Add }) {
+export function ImportRow({ group, workspaceId, added, disabled, add }: SourceProps & { added: boolean }) {
   const t = labels(), action = actionOf(group), open = read(expanded) === group.key
   const source = providers(group.items)
   const type = group.kind === 'skill' ? t.skill : 'MCP'
   const review = read(reviewed)[group.key]
+  const limitation = limitationLabel(group.items)
   return <Box direction="column" padding="sm" gap="sm">
     <Row align="center" justify="between" gap="sm">
       <Box direction="column" grow minWidth={0} gap="xs">
         <Text size="sm" weight="semibold">{group.name}</Text>
-        <Text size="xs" muted>{source ? type + ' · ' + source : type}</Text>
+        <Row gap="xs" align="center" wrap><Text size="xs" muted>{source ? type + ' · ' + source : type}</Text>{limitation ? <Badge tone="warning">{limitation}</Badge> : null}</Row>
       </Box>
       {added || (!open && review === 'same') ? <Badge tone="success">{added ? t.added : t.same}</Badge> : <Button
         icon={action === 'add' ? 'add' : open ? 'collapse' : 'expand'} size="sm" variant={action === 'add' ? 'outline' : 'ghost'}
@@ -177,6 +192,6 @@ export function ImportRow({ group, added, disabled, add }: { group: SourceGroup;
         }}>{open ? t.close : review === 'different' ? t.viewDiff : t[action]}</Button>}
     </Row>
     {action === 'add' && !added && group.items[0].skillRequirements ? <Collapsible title={t === words.ko ? '필요 환경' : 'Requirements'}><Text size="xs" muted>{group.items[0].skillRequirements}</Text></Collapsible> : null}
-    {open && !added ? <Sources group={group} disabled={disabled} add={add} /> : null}
+    {open && !added ? <Sources group={group} workspaceId={workspaceId} disabled={disabled} add={add} /> : null}
   </Box>
 }
