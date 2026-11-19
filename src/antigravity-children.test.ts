@@ -15,7 +15,12 @@ test('scopes provider states to a recent direct child and never infers ongoing w
     row(12, 'CASCADE_RUN_STATUS_RUNNING', -121_000), row(13, 'CASCADE_RUN_STATUS_IDLE', -300_000),
     row(14, 'CASCADE_RUN_STATUS_RUNNING', 60_000), row(15, 'unknown'), row(16, 'CASCADE_RUN_STATUS_IDLE', -86_400_001)])
   assert.deepEqual(children.get(session)?.map(c => c.state), ['working', 'working', 'unverifiable', 'idle', 'unverifiable', 'unverifiable'])
-  assert.deepEqual(Object.keys(children.get(session)![0]).sort(), ['state', 'updatedAt'])
+  assert.deepEqual(Object.keys(children.get(session)![0]).sort(), ['key', 'state', 'updatedAt'])
+  const keys = children.get(session)!.map(child => child.key)
+  assert.ok(keys.every(key => key && /^[a-f0-9]{32}$/.test(key)))
+  assert.equal(new Set(keys).size, keys.length)
+  assert.deepEqual((await read([row(11, 'CASCADE_RUN_STATUS_RUNNING', -50), row(10, 'CASCADE_RUN_STATUS_BUSY')])).get(session)?.map(c => c.key), [keys[1], keys[0]])
+  assert.equal(JSON.stringify(children.get(session)).includes(id(10)), false)
   assert.equal((await read([row(10, 'unknown'), row(10, 'unknown')])).size, 0)
   assert.equal((await read([row(10, 'unknown')], [...owners, ...owners])).size, 0)
   assert.equal((await read([{ ...row(10, 'unknown'), parent: id(6) }])).size, 0)
@@ -63,7 +68,8 @@ test('SQL resolves only the proven local Antigravity account and matching parent
   }
   const { out } = await check()
   assert.equal(out.get(session)?.length, 12)
-  assert.deepEqual(out.get(session)?.[0], { state: 'working', updatedAt: now - 30_000 })
+  assert.equal(out.get(session)?.[0].state, 'working')
+  assert.equal(out.get(session)?.[0].updatedAt, now - 30_000)
   assert.ok(out.get(session)?.slice(1).every(row => row.state === 'idle'))
   for (const binding of [{ ...r, provider: 'gemini' }, { ...r, accountHome: { ...r.accountHome, path: '/untrusted' } },
     { ...r, location: { ...r.location, executionHostId: 'remote' } }, { ...r, lease: { provenHandleLinkId: 'different' } },

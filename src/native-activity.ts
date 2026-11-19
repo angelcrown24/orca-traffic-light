@@ -1,6 +1,6 @@
 import { classifyResources, nativeToolName, type ResourceObservation } from './resource-classifier'
 
-export type ProviderChildStatus = { state: 'working' | 'idle' | 'waiting' | 'unverifiable'; updatedAt: number }
+export type ProviderChildStatus = { key?: string; state: 'working' | 'idle' | 'waiting' | 'unverifiable'; updatedAt: number }
 
 /** A deliberately narrow view of an Orca workspace agent's current reported activity. */
 export type NativeActivity = {
@@ -47,14 +47,14 @@ const isChildAgent = (child: Record<string, unknown>) => child.kind === undefine
 const legacyChildState = (state: unknown) => state === 'working' || state === 'waiting' || state === 'idle' || state === 'blocked' || state === 'unverifiable'
 
 // Modern children, even an empty array, supersede the provider's legacy roster.
-function childRoster(parent: Record<string, unknown>): unknown[] {
+export function childRoster(parent: Record<string, unknown>): unknown[] {
   if (parent.children !== undefined) return Array.isArray(parent.children) ? parent.children : []
   if (!Array.isArray(parent.subagents)) return []
   return parent.subagents.slice(0, 50).flatMap(value => {
     const child = object(value)
     if (!child || !validChildId(child.id) || !legacyChildState(child.state) ||
         typeof child.startedAt !== 'number' || !Number.isSafeInteger(child.startedAt) || child.startedAt < 0) return []
-    return [{ id: child.id, providerId: child.id, kind: 'agent', membership: 'live', state: child.state, description: child.description }]
+    return [{ id: child.id, providerId: child.id, kind: 'agent', membership: 'live', firstObservedAt: child.startedAt, state: child.state, description: child.description }]
   })
 }
 

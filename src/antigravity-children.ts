@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { lstat, realpath } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { queryLocalJournal } from './journal-activity'
+import { workId } from './work-id'
 import type { ProviderChildStatus } from './native-activity'
 
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
@@ -109,7 +110,7 @@ export async function readAntigravityChildren(workspaceId: string, sessionIds: s
       const state = at > now + 30_000 ? 'unverifiable' : row.status === 'CASCADE_RUN_STATUS_IDLE' ? 'idle'
         : fresh && (row.status === 'CASCADE_RUN_STATUS_RUNNING' || row.status === 'CASCADE_RUN_STATUS_BUSY') ? 'working' : 'unverifiable'
       const group = result.get(session) ?? []
-      if (group.length < limit) group.push({ state, updatedAt: at })
+      if (group.length < limit) group.push({ key: workId(session, 'antigravity', row.child), state, updatedAt: at })
       result.set(session, group)
     }
     return result

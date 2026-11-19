@@ -77,6 +77,10 @@ The default CLI is `orca` on macOS and `orca-ide` on Linux. On Windows, or for a
 
 ### Session activity
 
+The selected chat or terminal is the root of the execution tree. Branches open expanded. Select a row for its status and available timing details, or collapse a branch while following other work. Nesting follows the parent links reported by Orca. A settled parent with a running descendant stays visible as **Parent** until that descendant finishes.
+
+Orca can report a shell as the child agent’s current operation. For a Codex child, the panel can also place a running shell call from the local journal under its owner when both the thread and its current turn match. Antigravity’s optional status index supplies direct child relationships and report times.
+
 The monitor follows one chat or terminal in the current Orca workspace instance. On macOS it reads the active profile’s workspace layout in read-only mode and matches the selected tab, split pane and execution host. Where focus information is unavailable, select a local chat or terminal manually. A terminal is checked through `orca terminal show`. **Connected** means its PTY is live. A **Running** shell or background command needs a current tool call or a live command reported by the host. Only recognized program names are displayed. The panel omits arguments, terminal output and arbitrary terminal titles. A process detached without a reported session link falls outside the monitor’s view.
 
 The panel shows subagents whose reported state is **Working** or **Monitoring**, including delegated work that continues after the parent replies. On macOS, **Show Antigravity subagent status** can supplement a missing roster using Antigravity CLI’s local summary index in the default `~/.gemini` account. It verifies the selected workspace, account and conversation handle, then reads up to 12 direct children from the past 24 hours. Working reports older than two minutes drop out of the live list. A delegation call on its own does not establish that a child is still running.

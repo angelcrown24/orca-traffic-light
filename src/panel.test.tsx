@@ -1,4 +1,6 @@
-import { assert, mockHost, mount, test } from 'orca/testing'
+import type { TreeItem } from 'orca'
+import type { SessionWorkNode } from './session-shells'
+import { assert, mockHost, mount, test, type TestPanel } from 'orca/testing'
 import * as panel from './panel'
 
 test('shows observed calls and does not label finished as successful', async () => {
@@ -36,10 +38,26 @@ const options = [
   { id: 'chat:one', kind: 'chat' as const, provider: 'Codex', number: 1 },
   { id: 'terminal:two', kind: 'terminal' as const, number: 1 }
 ]
+const shell: SessionWorkNode = { id: 'sh', name: 'zsh', kind: 'shell', state: 'running', children: [] }
+const terminal: SessionWorkNode = { id: 'term', name: 'fish', kind: 'terminal', state: 'connected', children: [] }
+const treeTarget = { type: 'Tree' }
+function treeRoots(view: TestPanel) {
+  return (view.find(treeTarget)?.props.items as TreeItem[] | undefined) ?? []
+}
+function treeRow(view: TestPanel, label: string) {
+  function find(items: readonly TreeItem[]): TreeItem | undefined {
+    for (const item of items) {
+      if (item.label === label) return item
+      const child = find(item.children ?? [])
+      if (child) return child
+    }
+  }
+  return find(treeRoots(view)) ?? null
+}
 const session = {
   status: 'ready' as const, options, selected: 'chat:one',
   rows: [{ kind: 'shell' as const, state: 'running' as const, name: 'zsh' }],
-  subagents: []
+  subagents: [], tree: [shell]
 }
 
 test('shows the selected session shells with its active subagents and removes completed and idle hosts', async () => {
@@ -55,24 +73,91 @@ test('shows the selected session shells with its active subagents and removes co
       { role: 'subagent', label: 'finished', agentType: 'codex', state: 'done', toolName: null },
       { role: 'subagent', label: 'idle-job', agentType: 'codex', state: 'idle', toolName: null },
       { role: 'subagent', label: 'uncertain-job', agentType: 'codex', state: 'unverifiable', toolName: null }
+    ], tree: [
+      shell,
+      { id: 'review', name: 'review', kind: 'subagent', state: 'working', statusSource: 'antigravity', statusUpdatedAt: 1700000000000, children: [] },
+      { id: 'watch', name: 'watch', kind: 'subagent', state: 'monitoring', children: [] }
     ] })
   } })
   const view = await mount(panel, { host })
   try {
     assert.ok(view.find({ text: 'Session activity' }))
-    assert.ok(view.find({ text: 'zsh' }))
-    assert.ok(view.find({ text: 'review' }))
-    assert.ok(view.find({ text: 'watch' }))
-    assert.ok(view.find({ text: 'Monitoring' }))
+    assert.ok(view.find({ text: '2 active subagents' }))
+    assert.equal(treeRoots(view)[0]?.label, 'Codex Chat 1')
+    assert.ok(treeRow(view, 'zsh'))
+    assert.ok(treeRow(view, 'review'))
+    assert.ok(treeRow(view, 'watch'))
+    assert.equal(treeRow(view, 'watch')?.description, 'Monitoring')
+    await view.selectItem(treeTarget, 'review')
     assert.equal(view.find({ type: 'RelativeTime' })?.props.at, 1700000000000)
     for (const text of ['another-workspace-agent', 'completed-parent', 'finished', 'idle-job', 'uncertain-job', 'Agent activity', 'Done', 'Idle']) {
+      assert.equal(treeRow(view, text), null)
       assert.equal(view.find({ text }), null)
     }
     await view.toggle({ label: 'Settings & privacy' })
     await view.toggle({ label: 'Show Antigravity subagent status' })
-    assert.equal(view.find({ text: 'review' }), null)
-    assert.ok(view.find({ text: 'watch' }))
+    assert.equal(treeRow(view, 'review'), null)
+    assert.ok(treeRow(view, 'watch'))
     assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('opens every live branch by default and preserves folds and unnamed worker labels as siblings change', async () => {
+  const ctx = { workspaceId: 'workspace-1', branch: 'main', displayName: 'Workspace', terminals: [] }
+  const reviewer: SessionWorkNode = { id: 'worker-a', kind: 'subagent', state: 'working', children: [
+    { id: 'verifier', name: 'verifier', kind: 'subagent', state: 'monitoring', children: [shell] }
+  ] }
+  const runner: SessionWorkNode = { id: 'worker-b', kind: 'subagent', state: 'working', children: [] }
+  let tree = [reviewer, runner]
+  const host = mockHost({ settings: { nativeActivity: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
+    'session.shells': () => ({ ...session, tree })
+  } })
+  const view = await mount(panel, { host })
+  try {
+    await view.emit('workspace.changed', { context: ctx })
+    const root = treeRoots(view)[0]
+    assert.deepEqual(root.children?.map(item => item.label), ['Subagent 1', 'Subagent 2'])
+    const verifier = root.children?.[0]?.children?.[0]
+    assert.equal(verifier?.label, 'verifier')
+    assert.equal(verifier?.children?.[0]?.label, 'zsh')
+    assert.deepEqual(view.expandedOf(treeTarget).sort(), [root.key, 'worker-a', 'verifier'].sort())
+    await view.activateItem(treeTarget, 'verifier')
+    assert.ok(view.find({ text: 'verifier' }))
+    await view.collapse(treeTarget, 'worker-a')
+    assert.equal(view.find({ text: 'verifier' }), null)
+    tree = [reviewer, { ...runner, children: [{ ...shell, id: 'second-shell', name: 'fish' }] }]
+    await view.emit('workspace.changed', { context: ctx })
+    // Orca's renderer follows the controlled prop; the test kit's expandedOf is seeded only once.
+    const expanded = view.find(treeTarget)?.props.expanded as string[]
+    assert.equal(expanded.includes('worker-a'), false)
+    assert.ok(expanded.includes('worker-b'))
+    tree = [runner, { ...runner, id: 'worker-c' }]
+    await view.emit('workspace.changed', { context: ctx })
+    assert.deepEqual(treeRoots(view)[0].children?.map(item => item.label), ['Subagent 2', 'Subagent 3'])
+    assert.deepEqual(view.errors, [])
+  } finally { await view.unmount() }
+})
+
+test('keeps deep and wide work within Orca’s Tree limits and reports the omitted count', async () => {
+  let branch: SessionWorkNode = shell
+  for (let depth = 0; depth < 18; depth++) {
+    branch = { id: 'agent-' + depth, name: 'worker', kind: 'subagent', state: 'working', children: [branch] }
+  }
+  const siblings = Array.from({ length: 2000 }, (_, index) => ({ ...shell, id: 'peer-' + index }))
+  const host = mockHost({ settings: { nativeActivity: true }, requests: {
+    'calls.get': () => ({ workspace: true, calls: [] }),
+    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
+    'session.shells': () => ({ ...session, tree: [branch, ...siblings] })
+  } })
+  const view = await mount(panel, { host })
+  try {
+    assert.ok(view.find({ text: '18 active subagents' }))
+    assert.ok(view.find({ text: '20 more items exceed Orca’s tree display limit.' }))
+    assert.equal(treeRoots(view)[0]?.children?.length, 1985)
+    assert.deepEqual(view.errors, [])
+    assert.deepEqual(view.warnings, [])
   } finally { await view.unmount() }
 })
 
@@ -85,27 +170,27 @@ test('selects a session when Orca cannot resolve focus and clears the old sessio
     'session.shells': ({ selected }) => {
       inputs.push(selected)
       if (!selected && !focused) return { status: 'select', options, selected: null, rows: [], subagents: [] }
-      if (selected === 'terminal:two') return { ...session, selected, rows: [{ kind: 'terminal', state: 'connected', name: 'fish' }] }
+      if (selected === 'terminal:two') return { ...session, selected, tree: [terminal], rows: [{ kind: 'terminal', state: 'connected', name: 'fish' }] }
       return session
     }
   } })
   const view = await mount(panel, { host, locale: 'ko-KR' })
   try {
-    assert.equal(view.find({ text: 'zsh' }), null)
-    assert.equal(view.find({ text: 'fish' }), null)
+    assert.equal(treeRow(view, 'zsh'), null)
+    assert.equal(treeRow(view, 'fish'), null)
     assert.ok(view.find({ label: '세션' }))
     await view.select({ label: '세션' }, 'terminal:two')
-    assert.ok(view.find({ text: 'fish' }))
-    assert.ok(view.find({ text: '연결됨' }))
-    assert.equal(view.find({ text: 'zsh' }), null)
+    assert.ok(treeRow(view, 'fish'))
+    assert.equal(treeRow(view, 'fish')?.description, '연결됨')
+    assert.equal(treeRow(view, 'zsh'), null)
     focused = true
     await view.select({ label: '세션' }, 'follow-active')
-    assert.ok(view.find({ text: 'zsh' }))
-    assert.equal(view.find({ text: 'fish' }), null)
+    assert.ok(treeRow(view, 'zsh'))
+    assert.equal(treeRow(view, 'fish'), null)
     await view.select({ label: '세션' }, 'terminal:two')
     focused = false
     await view.emit('workspace.changed', { context: null })
-    assert.equal(view.find({ text: 'fish' }), null)
+    assert.equal(treeRow(view, 'fish'), null)
     assert.equal(inputs.at(-1), null)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
@@ -116,7 +201,7 @@ test('distinguishes a verified empty session, disabled monitoring and an unavail
   const host = mockHost({ settings: { nativeActivity: false }, requests: {
     'calls.get': () => ({ workspace: true, calls: [] }),
     'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
-    'session.shells': () => ({ status, selected: status === 'ready' ? 'chat:one' : null, options: status === 'ready' ? options.slice(0, 1) : [], rows: [], subagents: [] })
+    'session.shells': () => ({ status, selected: status === 'ready' ? 'chat:one' : null, options: status === 'ready' ? options.slice(0, 1) : [], rows: [], subagents: [], tree: [] })
   } })
   const view = await mount(panel, { host })
   try {
@@ -361,7 +446,7 @@ test('an unavailable pinned session stays selected until the user explicitly fol
     'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
     'session.shells': ({ selected }) => {
       inputs.push(selected)
-      if (!selected) return { ...session, selected: 'terminal:two', rows: [{ kind: 'terminal', name: 'fish', state: 'connected' }] }
+      if (!selected) return { ...session, selected: 'terminal:two', tree: [terminal], rows: [{ kind: 'terminal', name: 'fish', state: 'connected' }] }
       return attached ? { ...session, selected } : { status: 'select', selected: null, rows: [], subagents: [], options: options.slice(1) }
     }
   } })
@@ -373,10 +458,10 @@ test('an unavailable pinned session stays selected until the user explicitly fol
     await view.emit('workspace.changed', { context: ctx })
     await view.emit('workspace.changed', { context: ctx })
     assert.equal(inputs.at(-1), 'chat:one')
-    assert.equal(view.find({ text: 'fish' }), null)
+    assert.equal(treeRow(view, 'fish'), null)
     assert.ok(view.find({ text: 'The selected session is no longer available. Choose a session to continue.' }))
     await view.select({ label: 'Session' }, 'follow-active')
-    assert.ok(view.find({ text: 'fish' }))
+    assert.ok(treeRow(view, 'fish'))
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })

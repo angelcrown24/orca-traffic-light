@@ -30,15 +30,15 @@ Open **Activity** and turn on **Settings & privacy → Show chat activity**. In 
 
 | In the panel | What it tells you |
 | --- | --- |
+| **Session activity** | An expanded tree of the selected session’s live work. Parallel agents appear at the same level. Each delegated agent or command appears beneath its reported owner. |
 | **Detected items** | Skills, plugins and MCP servers observed in this workspace. Items in use appear first. Page through longer lists. |
 | **In use** | The item was observed in an ongoing agent turn or running request. |
 | **Jev** | The shared runner linked this skill read or MCP call to a Jev recommendation in the same conversation. |
-| **Session activity** | Running shell calls, background commands and active subagents in the selected session. A selected live terminal shows **Connected**. |
 | **Recent tool calls** | The latest 30 calls observed across local terminals, native chats and the shared runner in this workspace, newest first. **Clear list** hides earlier entries and keeps running jobs and source history intact. |
 
 For a Gemini chat running through Antigravity, enable **Show Antigravity subagent status** on macOS. A child that continues working after its parent replies stays visible while its provider reports it as active. Short calls can finish between samples, and a detached process needs a session link from Orca or the provider to appear. [Example with an active Antigravity subagent](docs/images/antigravity-status-en.png)
 
-<a href="docs/images/activity-en.png"><img src="docs/images/activity-en.png" width="390" alt="English Activity tab with a running shell in the selected session, detected skills and inline Jev badges"></a>
+<a href="docs/images/activity-en.png"><img src="docs/images/activity-en.png" width="390" alt="Expanded session tree showing parallel subagents, a nested agent and a command under its owner"></a>
 
 ## Share a skill or MCP tool
 

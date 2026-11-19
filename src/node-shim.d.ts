@@ -12,3 +12,7 @@ declare module 'node:fs/promises' {
 declare module 'node:url' {
   export function pathToFileURL(path: string): URL
 }
+declare module 'node:crypto' {
+  export function randomUUID(): string
+  export function createHmac(algorithm: 'sha256', key: string): { update(data: string): { digest(format: 'hex'): string } }
+}

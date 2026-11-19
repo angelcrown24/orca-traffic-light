@@ -20,12 +20,29 @@ export default defineCheck({
   antigravityChild: { settings: { nativeActivity: true, antigravityChildStatus: true }, requests: { ...requests,
     'session.shells': () => ({ status: 'ready', options: [{ id: 'chat:demo', kind: 'chat', provider: 'Antigravity', number: 1 }], selected: 'chat:demo',
       rows: [{ kind: 'background', name: 'node', state: 'running' }],
-      subagents: [{ agentType: 'Antigravity', role: 'subagent', state: 'working', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000041 }] }),
+      subagents: [{ agentType: 'Antigravity', role: 'subagent', state: 'working', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000041 }],
+      tree: [
+        { id: 'provider-child', kind: 'subagent', state: 'working', statusSource: 'antigravity', statusUpdatedAt: 1700000000041, children: [] },
+        { id: 'background-job', kind: 'background', name: 'node', state: 'running', children: [] }
+      ] }),
     'native.get': () => ({ status: 'ready', resources: [], activities: [] })
   } },
   jevBadges: { settings: { nativeActivity: true }, requests: { ...requests,
     'session.shells': () => ({ status: 'ready', options: [{ id: 'chat:demo', kind: 'chat', provider: 'Codex', number: 1 }], selected: 'chat:demo',
-      rows: [{ kind: 'shell', name: 'zsh', state: 'running' }], subagents: [] }),
+      rows: [{ kind: 'background', name: 'pytest', state: 'running' }],
+      subagents: [
+        { agentType: 'Codex', role: 'subagent', label: 'test_runner', state: 'working', toolName: null },
+        { agentType: 'Codex', role: 'subagent', label: 'reviewer', state: 'working', toolName: null },
+        { agentType: 'Codex', role: 'subagent', label: 'verifier', state: 'monitoring', toolName: null }
+      ],
+      tree: [
+        { id: 'tests', kind: 'subagent', name: 'test_runner', state: 'working', children: [
+          { id: 'test-command', kind: 'background', name: 'pytest', state: 'running', children: [] }
+        ] },
+        { id: 'review', kind: 'subagent', name: 'reviewer', state: 'working', children: [
+          { id: 'verify', kind: 'subagent', name: 'verifier', state: 'monitoring', children: [] }
+        ] }
+      ] }),
     'native.get': () => ({
       status: 'ready', journalStatus: 'ready', resources: [{ category: 'plugin', name: 'design-tools', evidence: 'observed' }],
       activities: [

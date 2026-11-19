@@ -1,5 +1,11 @@
 # Release history
 
+## [v0.11.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.11.0) · See delegated work as a tree
+
+- Session activity opens with the selected chat or terminal at the root. Parallel agents, nested agents and running commands appear under their reported owners.
+- Branches expand and collapse in place. Working and monitoring states remain visible in the English and Korean sidebar.
+- The illustrated Activity guide shows parallel agents and nested work, plus a separate example of the direct child status available from Antigravity.
+
 ## [v0.10.1](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.10.1) · Clearer activity and more reliable shared tools
 
 - Activity puts resources in use first, pages longer lists and shows a single empty state. A manually selected session that closes prompts you to choose another.
