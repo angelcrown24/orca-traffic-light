@@ -47,6 +47,24 @@ test('canonical aliases and equal provider copies are quiet; supporting files an
   assert.deepEqual((await f.review()).findings,[])
 })
 
+test('suggested comparison picks different package versions when all three copies contain the same paths', async t => {
+  const f = await setup(t)
+  for (const root of ['.agents', '.claude', '.codex']) {
+    await f.put(root + '/skills/build/SKILL.md', skill('build'))
+    await f.put(root + '/skills/build/guide.md', 'Original')
+  }
+  const catalog = await f.scan()
+  const sorted = catalog.items.map(item => item.id).sort()
+  // Make only the last id differ, so the first two ids cannot exhibit the finding.
+  const distinct = sorted.at(-1)
+  await writeFile(join(dirname(catalog.records.get(distinct).path), 'guide.md'), 'Revised')
+  const row = (await f.review()).findings.find(finding => finding.kind === 'variants')
+  assert.deepEqual(row.evidenceDetails, [{ path: 'guide.md', state: 'changed' }])
+  assert.equal(row.comparisonIds.length, 2)
+  assert.ok(row.comparisonIds.includes(distinct))
+  assert.ok(row.comparisonIds.some(id => sorted.slice(0, 2).includes(id)))
+})
+
 test('reports only actual package references, omitting examples, generated outputs, private paths and old findings', async t => {
   const f = await setup(t), dir = '.agents/skills/ref'
   const lines = ['---','name: ref','---','Read [schema](references/schema.md#section).','Run `python3 scripts/build.py`.',

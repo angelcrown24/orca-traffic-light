@@ -60,7 +60,7 @@ test('review reads only selected versioned sources on explicit local generation;
   assert.equal(calls.filter(c=>c==='/api/chat').length,1)
 })
 
-test('cloud aliases and decision models are skipped before reading files or submitting any instructions', async () => {
+test('cloud aliases and models with no supported local capability are skipped before reading files or submitting any instructions', async () => {
   const data={items:[skill('a')],records:new Map([['a',{kind:'skill',fingerprint:'x',path:'/missing/only-read-if-local'}]])}
   const counts=[]
   const response=await reviewSkills(data,{ids:['a'],language:'en'},{json:async (url,payload)=>{
@@ -71,4 +71,46 @@ test('cloud aliases and decision models are skipped before reading files or subm
   assert.deepEqual(response,{status:'unavailable'})
   assert.deepEqual(counts.map(([,payload])=>payload?.model),[undefined,'remote','embed'])
   await assert.rejects(reviewSkills(data,{ids:['a'],language:'en'},{json:async url=>url.endsWith('tags')?{models:[{name:'local'}]}:{capabilities:['completion']},checkContext(){throw Error('workspace changed')}}),/workspace changed/)
+})
+
+test('decision-only install reviews selected evidence locally, validates citations and discards stale results', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'decision-review-')))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const body = '# When to use\nChoose this skill for markdown.\n# Verification\nThe formatter exits with code zero.'
+  const path = join(root, 'SKILL.md')
+  await writeFile(path, body)
+  const record = { kind: 'skill', path, fingerprint: createHash('sha256').update(body).digest('hex') }
+  const data = { items: [skill('selected'), skill('private-other')], records: new Map([['selected', record]]) }
+  const input = { ids: ['selected'], language: 'en' }
+  let choice = 'p1', changed = false, runs = 0
+  const json = async (url, payload) => {
+    assert.equal(new URL(url).origin, 'http://127.0.0.1:11434')
+    if (url.endsWith('/api/tags')) return { models: [
+      { name: 'kev:cloud', capabilities: ['decision'] }, { name: 'kev:remote', capabilities: ['decision'], remote_host: 'elsewhere' },
+      { name: 'kev:local', capabilities: ['decision'] }
+    ] }
+    assert.ok(url.endsWith('/v1/systemone'))
+    assert.equal(payload.model, 'kev:local')
+    assert.ok(!JSON.stringify(payload).includes(root))
+    assert.ok(!JSON.stringify(payload).includes('private-other'))
+    assert.equal(payload.state.skill1.p1, body)
+    assert.deepEqual(Object.keys(payload.questions).sort(), ['skill1_scope', 'skill1_verify'])
+    runs++
+    return { answers: {
+      skill1_scope: { type: 'choice', choice, probabilities: { p1: 0.9 } },
+      skill1_verify: { type: 'choice', choice: 'none', probabilities: { none: 0.96 } }
+    } }
+  }
+  const success = await reviewSkills(data, input, { json })
+  assert.equal(success.method, 'decision')
+  assert.match(success.text, /When to use it · SKILL.md L1–4/)
+  assert.match(success.text, /How to verify success · No clear passage/)
+  choice = '__proto__'
+  assert.deepEqual(await reviewSkills(data, input, { json }), { status: 'unavailable' })
+  await assert.rejects(reviewSkills(data, input, { json: async (...args) => {
+    const result = await json(...args)
+    if (result.answers) changed = true
+    return result
+  }, checkContext() { if (changed) throw Error('workspace changed') } }), /workspace changed/)
+  assert.equal(runs, 3)
 })

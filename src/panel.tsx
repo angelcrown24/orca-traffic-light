@@ -6,7 +6,7 @@ import type { ToolboxActivity } from './toolbox-types'
 import type { NativeToolCall } from './native-reader'
 import { SessionWork, resetSessionWork, refreshSessionWork } from './session-work'
 import type { ResourceObservation } from './resource-classifier'
-import { ArchitecturePanel, ToolboxPanel, leaveLibrary, openToolbox, setupToolbox } from './toolbox-panel'
+import { ArchitecturePanel, ToolboxPanel, ToolboxReviewPanel, leaveToolboxTab, openToolbox, setupToolbox } from './toolbox-panel'
 
 const tab = atom('traffic-light.tab', 'activity', { persist: 'workspace' })
 const calls = atom<Call[]>([])
@@ -120,7 +120,7 @@ async function changeActivitySetting(key: 'nativeActivity' | 'antigravityChildSt
 }
 export function setup(ctx: PanelContext): void {
   isPanelVisible = () => read(ctx.visible) && read(tab) === 'activity'
-  setupToolbox(ctx, () => read(tab))
+  setupToolbox(ctx, tab)
   ctx.subscriptions.push({ dispose: () => { requestId++; sharedRequestId++; settingsReadId++; nativeRequestId++; resetSessionWork(); isPanelVisible = () => false } })
   ctx.subscriptions.push(plugin.on('toolbox.changed', () => { void refreshShared() }))
   ctx.subscriptions.push(plugin.on('calls.changed', () => { void refresh() }))
@@ -146,7 +146,13 @@ export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(settings.onDidChange(({ key }) => {
     if (key === 'nativeActivity' || key === 'antigravityChildStatus') void readActivitySettings()
   }))
-  const timer = setInterval(() => { if (isPanelVisible()) { void refresh(); void refreshNative(); void refreshSessionWork(canReadSession); if (sharedDirty) void refreshShared() } }, 3000)
+  let wasVisible = read(ctx.visible)
+  const timer = setInterval(() => {
+    const visible = read(ctx.visible)
+    if (visible && !wasVisible && read(tab) !== 'activity') void openToolbox()
+    wasVisible = visible
+    if (isPanelVisible()) { void refresh(); void refreshNative(); void refreshSessionWork(canReadSession); if (sharedDirty) void refreshShared() }
+  }, 3000)
   ctx.subscriptions.push({ dispose: () => clearInterval(timer) })
   void readActivitySettings(true)
   void refresh()
@@ -261,22 +267,26 @@ function ActivityPanel() {
   </Box>
 }
 
+function selectTab(value: string) {
+  if (read(tab) === value) return
+  leaveToolboxTab(read(tab))
+  resetSessionWork(false)
+  set(tab, value)
+}
+
 export default function Panel() {
   const ko = panelLanguage(env.locale) === 'ko'
-  return <Box direction="column" gap="md" padding="md">
+  return <Box direction="column" gap="md" paddingY="md">
     <Heading>Traffic Light</Heading>
     <Tabs label={ko ? 'Traffic Light 보기' : 'Traffic Light views'} value={read(tab)} onChange={async value => {
-      if (value !== read(tab)) {
-        if (read(tab) === 'library') leaveLibrary()
-        resetSessionWork(false)
-      }
-      set(tab, value)
-      if (value === 'library' || value === 'structure') await openToolbox()
+      selectTab(value)
+      if (value !== 'activity') await openToolbox()
       if (value === 'activity') await Promise.all([refresh(), refreshNative(), refreshShared(), refreshSessionWork(canReadSession)])
     }}>
       <Tab value="activity" label={ko ? '활동' : 'Activity'}><ActivityPanel /></Tab>
       <Tab value="library" label={ko ? '공용 도구' : 'Library'}><ToolboxPanel /></Tab>
-      <Tab value="structure" label={ko ? '구조' : 'How it works'}><ArchitecturePanel /></Tab>
+      <Tab value="review" label={ko ? '스킬 점검' : 'Review'}>{read(tab) === 'review' ? <ToolboxReviewPanel onOpenLibrary={() => selectTab('library')} /> : null}</Tab>
+      <Tab value="structure" label={ko ? '구조' : 'Map'}><ArchitecturePanel /></Tab>
     </Tabs>
   </Box>
 }

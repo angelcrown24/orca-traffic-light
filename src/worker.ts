@@ -50,6 +50,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('toolbox.automation', toolbox.setAutomation)
   orca.panels.handle('toolbox.skillReview', toolbox.skillReview)
   orca.panels.handle('toolbox.previewSkills', toolbox.previewSkills)
+  orca.panels.handle('toolbox.inspectSkills', toolbox.inspectSkills)
   orca.panels.handle('toolbox.reviewSkills', toolbox.reviewSkills)
   orca.panels.handle('toolbox.copySkillReview', toolbox.copySkillReview)
   orca.panels.handle('toolbox.compare', toolbox.compare)

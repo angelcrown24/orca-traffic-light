@@ -1,4 +1,4 @@
-import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis } from '../src/toolbox-types'
+import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis, SkillInspection } from '../src/toolbox-types'
 export function createToolboxManager(options: {
   getContext: () => Promise<{ workspaceId?: string } | null>
   getWorkspaces: () => Promise<{ workspaces: { id: string; path: string; hostId: string | null }[] }>
@@ -20,6 +20,7 @@ export function createToolboxManager(options: {
   setAutomation(input: { workspaceId: string; enabled: boolean }): Promise<ToolboxState>
   skillReview(input: { workspaceId: string }): Promise<SkillReviewReport>
   previewSkills(input: RecommendationPreviewInput): Promise<RecommendationPreview>
+  inspectSkills(input: SkillAnalysisInput): Promise<SkillInspection>
   reviewSkills(input: SkillAnalysisInput): Promise<SkillAnalysis>
   copySkillReview(input: SkillAnalysisInput): Promise<{ copied: boolean; prompt: string }>
   compare(input: { id: string }): Promise<ToolboxComparison>

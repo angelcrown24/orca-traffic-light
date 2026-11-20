@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { resolve, sep } from 'node:path'
+import { reviewWithDecisionModel } from './decision-review.mjs'
 import { readBounded } from './catalog.mjs'
 import { localJson, recommendCapabilities } from './skill-recommend.mjs'
 
@@ -61,25 +62,29 @@ export function buildSkillReviewRequest(data, input) {
   return [restriction, reviewInstructions[input.language], JSON.stringify(sources, null, 2)].join('\n\n')
 }
 
-const localModel = name => typeof name === 'string' && /^[a-z0-9][a-z0-9._:/-]{0,127}$/i.test(name) && !/cloud|^kev(:|$)/i.test(name)
+const localName = name => typeof name === 'string' && /^[a-z0-9][a-z0-9._:/-]{0,127}$/i.test(name) && !/cloud/i.test(name)
 const isRemote = model => Boolean(model.remote_model || model.remote_host)
 
 async function findLocalModel(json) {
   const { models } = await json(endpoint + '/api/tags', null, 1500)
-  const candidates = (Array.isArray(models) ? models : []).filter(m => m && localModel(m.name) && !isRemote(m) &&
+  const installed = (Array.isArray(models) ? models : []).filter(m => m && localName(m.name) && !isRemote(m))
+  const candidates = installed.filter(m => !/^kev(:|$)/i.test(m.name) &&
     (!Array.isArray(m.capabilities) || m.capabilities.includes('completion')))
   for (const { name } of candidates.slice(0, 6)) {
     try {
       const info = await json(endpoint + '/api/show', { model: name }, 1500)
-      if (!isRemote(info) && info.capabilities?.includes('completion')) return name
+      if (!isRemote(info) && info.capabilities?.includes('completion')) return { name, method: 'generation' }
     } catch { /* A missing or incompatible model can be skipped. */ }
   }
+  const decision = installed.find(m => /^kev(:|$)/i.test(m.name) && Array.isArray(m.capabilities) && m.capabilities.includes('decision'))
+  if (decision) return { name: decision.name, method: 'decision' }
 }
 
 export async function reviewSkills(data, input, { json = localJson, checkContext = noop } = {}) {
   const skills = selectedSkills(data, input)
-  const model = await findLocalModel(json).catch(() => undefined)
-  if (!model) return { status: 'unavailable' }
+  const local = await findLocalModel(json).catch(() => undefined)
+  if (!local) return { status: 'unavailable' }
+  const model = local.name
   await checkContext()
   const excerpts = []
   let truncated = false
@@ -91,6 +96,12 @@ export async function reviewSkills(data, input, { json = localJson, checkContext
     excerpts.push({ name: item.name, instructions: body.slice(0, excerptLimit) })
   }
   await checkContext()
+  if (local.method === 'decision') {
+    const text = await reviewWithDecisionModel(excerpts, input.language,
+      payload => json(endpoint + '/v1/systemone', { model, ...payload }, 90000)).catch(() => null)
+    await checkContext()
+    return text ? { status: 'ready', method: 'decision', model, text, truncated } : { status: 'unavailable' }
+  }
   const response = await json(endpoint + '/api/chat', { model, stream: false, think: false,
     messages: [{ role: 'system', content: reviewInstructions[input.language] }, { role: 'user', content: JSON.stringify(excerpts) }],
     options: { temperature: 0.2, num_predict: 600, num_ctx: 8192 }

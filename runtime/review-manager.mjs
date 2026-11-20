@@ -1,9 +1,11 @@
+import { createSkillInspection } from './skill-inspection.mjs'
 import { createSkillReviewer } from './skill-review.mjs'
 import { buildSkillReviewRequest, previewRecommendations, reviewSkills as analyzeSkills } from './review-assistant.mjs'
 
-// Review is a Library action. It never creates a bundle or claims an activity event.
+// Review is read-only and never creates a bundle or claims an activity event.
 export function createReviewRequests({ context, workspaceFor, getWorkspaces, loadSelection, selectedFor, scanNow, clipboard }) {
   const inspect = createSkillReviewer()
+  const inspectSelected = createSkillInspection(createSkillReviewer())
 
   async function catalogFor(workspaceId) {
     if (typeof workspaceId !== 'string' || !workspaceId || workspaceId.length > 2048) throw new Error('Choose a local workspace.')
@@ -57,6 +59,13 @@ export function createReviewRequests({ context, workspaceFor, getWorkspaces, loa
     return result
   }
 
+  async function inspectSkills(input) {
+    const data = await catalogFor(input.workspaceId)
+    const result = await inspectSelected(data, input)
+    await context(input.workspaceId)
+    return result
+  }
+
   async function reviewSkills(input) {
     const data = await catalogFor(input.workspaceId)
     const result = await analyzeSkills(data, input, { checkContext: () => context(input.workspaceId) })
@@ -72,5 +81,5 @@ export function createReviewRequests({ context, workspaceFor, getWorkspaces, loa
     try { copied = await clipboard(prompt) === true } catch { /* The panel also supports manual copying. */ }
     return { copied, prompt }
   }
-  return { skillReview, previewSkills, reviewSkills, copySkillReview }
+  return { skillReview, inspectSkills, previewSkills, reviewSkills, copySkillReview }
 }

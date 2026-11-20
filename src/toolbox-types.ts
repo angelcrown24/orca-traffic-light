@@ -37,6 +37,7 @@ export type SkillReviewFinding = {
   lines?: number[]
   evidenceCount?: number
   evidenceDetails?: { path: string; state: 'added' | 'removed' | 'changed' | 'only'; ids?: string[] }[]
+  comparisonIds?: [string, string]
   successorId?: string
   reviewedSourceStamp?: string
   requirement?: { file: string; field: string; line?: number }
@@ -54,4 +55,11 @@ export type RecommendationPreviewInput = { workspaceId: string; query: string; e
 export type PreviewRanking = { method: 'kev' | 'keywords'; names: string[] }
 export type RecommendationPreview = { before: PreviewRanking; after?: PreviewRanking }
 export type SkillAnalysisInput = { workspaceId: string; ids: string[]; language: 'en' | 'ko' }
-export type SkillAnalysis = { status: 'ready'; model: string; text: string; truncated: boolean } | { status: 'unavailable' }
+export type SkillAnalysis = { status: 'ready'; model: string; method?: 'decision' | 'generation'; text: string; truncated: boolean } | { status: 'unavailable' }
+
+export type SkillInspection = {
+  summary: string
+  nextStep: string
+  skills: { id: string; name: string; providers: string[] }[]
+  evidence: { label: string; detail: string; source?: string }[]
+}

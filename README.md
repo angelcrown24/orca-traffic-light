@@ -60,23 +60,24 @@ If an entry says **Provider-specific** or **Compatibility review**, expand it in
 
 </details>
 
-The **How it works** tab shows the path from provider installations through the shared store to the workspace selection and active connections. Its counts distinguish skills from MCP servers. Expand either image for the full-size English example.
+The **Map** tab shows the path from provider installations through the shared store to the workspace selection and active connections. Its counts distinguish skills from MCP servers. Expand either image for the full-size English example.
 
-| Library | How it works |
+| Library | Map |
 | --- | --- |
-| <a href="docs/images/library-en.png"><img src="docs/images/library-en.png" width="350" alt="English Library tab with workspace selection and skills and MCP servers in the shared library"></a> | <a href="docs/images/architecture-en.png"><img src="docs/images/architecture-en.png" width="350" alt="English How it works diagram with provider counts, shared store, workspace selection, and on-demand connections"></a> |
+| <a href="docs/images/library-en.png"><img src="docs/images/library-en.png" width="350" alt="English Library tab with workspace selection and skills and MCP servers in the shared library"></a> | <a href="docs/images/architecture-en.png"><img src="docs/images/architecture-en.png" width="350" alt="English diagram with provider counts, shared store, workspace selection, and on-demand connections"></a> |
 
 All screenshots show example workspaces with sample data.
 
 ## Review installed skills
 
-Open **Library → Skill review** in a local workspace. Expand a skill to see the evidence, such as a missing reference at a particular line, a file present in only one provider’s copy, or a documented successor installed alongside an older version. Matching copies share one summary. **Set aside this version** hides a finding in this workspace until its evidence changes. You can restore it at any time.
+Open **Review**, the tab immediately after **Library**, in a local workspace. Select a finding to see what Traffic Light found, the recommended next step, and the file or line behind it. For example, a missing-reference finding shows the exact reference and where the skill uses it. This check runs on your machine and uses zero model tokens.
 
-<a href="docs/images/skill-review-en.png"><img src="docs/images/skill-review-en.png" width="390" alt="Skill review in a narrow sidebar showing which local packages need attention and the evidence for a finding"></a>
+<a href="docs/images/skill-review-en.png"><img src="docs/images/skill-review-en.png" width="390" alt="The Review tab in English, with a local skill finding and the evidence behind it"></a>
 
-- **Check again** compares local packages and reuses unchanged results while the plugin worker is running. The check uses zero model tokens.
-- **Preview recommendations** tries an example task against the workspace selection. A draft description lets you compare recommendations before editing a skill.
-- **Review skill content** lets you select one or two installed skills for an optional local Ollama review. **Copy agent request** prepares a read-only review request with their file locations for a conversation of your choice.
+- To inspect a skill that has no finding, select **Choose a skill**. From its result, choose **Compare another skill** to review two installations together.
+- **Check again** refreshes the findings. **Set aside this version** hides a finding in this workspace until its evidence changes. You can restore it at any time.
+- **Additional AI analysis** can send selected excerpts to a local model. A text model writes a review. A Kev decision model identifies passages about when to use the skill and how to verify success. **Copy agent request** creates a read-only request for a conversation you choose.
+- **Preview recommendations** tries a task against the workspace selection. A draft description lets you compare recommendations before editing a skill.
 
 The review workflow draws on ECC’s changed-skill checks and evidence-based recommendations. [ECC skill-stocktake](https://github.com/affaan-m/ECC/tree/main/skills/skill-stocktake)
 

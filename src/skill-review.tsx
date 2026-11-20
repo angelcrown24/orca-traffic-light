@@ -1,6 +1,6 @@
-import { atom, Box, Button, Callout, Collapsible, EmptyState, env, Heading, plugin, read, Row, Separator, set, Stack, Text } from 'orca'
+import { atom, Button, Callout, EmptyState, env, Heading, List, ListItem, plugin, read, Row, set, Stack, Text } from 'orca'
 import { englishCount, panelLanguage } from './panel-language'
-import { ReviewAssistant, openSkillComparison, resetReviewAssistant } from './review-assistant'
+import { InspectionResult, inspectSelection, RecommendationPreviewPanel, resetReviewAssistant, SkillPicker } from './review-assistant'
 import type { CatalogItem, SkillReviewFinding, SkillReviewReport } from './toolbox-types'
 import './protocol'
 
@@ -41,9 +41,11 @@ const review = atom<SkillReviewReport | null>(null)
 const status = atom<'idle' | 'loading' | 'error' | 'ready'>('idle')
 const deferred = atom<[string, string][]>('traffic-light.review-deferred', [], { persist: 'workspace' })
 const showDeferred = atom(false)
-const comparing = atom(false)
+const screen = atom<'findings' | 'picker' | 'result'>('findings')
+const focused = atom<Group | null>(null)
+const focusedIds = atom<string[]>([])
+const baseline = atom<string | undefined>(undefined)
 const sourceStatus = atom<'idle' | 'loading' | 'changed'>('idle')
-const expanded = atom<string | null>(null)
 const page = atom(0)
 const pageSize = 6
 let epoch = 0
@@ -52,8 +54,8 @@ let owner: string | null = null
 export function resetSkillReview() {
   epoch++
   owner = null
-  set(comparing, false); set(sourceStatus, 'idle')
-  set(review, null); set(status, 'idle'); set(showDeferred, false); set(expanded, null); set(page, 0)
+  set(screen, 'findings'); set(focused, null); set(focusedIds, []); set(baseline, undefined); set(sourceStatus, 'idle')
+  set(review, null); set(status, 'idle'); set(showDeferred, false); set(page, 0)
   resetReviewAssistant()
 }
 
@@ -65,7 +67,7 @@ export async function checkSkills(workspaceId: string | null, force = false): Pr
   set(sourceStatus, 'idle')
   set(status, 'loading')
   try {
-    const result = await plugin.request('toolbox.skillReview', { workspaceId })
+    const result = await plugin.request('toolbox.skillReview', { workspaceId }, { timeoutMs: 60000 })
     if (request !== epoch) return
     set(review, result); set(status, 'ready')
   } catch {
@@ -93,47 +95,18 @@ function groupsFor(issues: SkillReviewFinding[]): Group[] {
   return [...groups.values()]
 }
 
-type OpenSource = (issue: SkillReviewFinding) => Promise<void>
-function Evidence({ issue, isDeferred, openSource, canOpen, items }: {
-  issue: SkillReviewFinding; isDeferred: boolean; openSource: OpenSource; canOpen: boolean; items: CatalogItem[]
-}) {
-  const ko = panelLanguage(env.locale) === 'ko', t = ko ? labels.ko : labels.en
-  const providers = issue.providers.map(p => p === 'Shared' ? (ko ? '공용' : 'Shared') : p).join(' · ')
-  const reasonLabels: Record<string, string> = t
-  const remainingEvidence = Math.max(0, (issue.evidenceCount ?? issue.evidence.length) - issue.evidence.length)
-  const paths = issue.kind === 'variants' || issue.kind === 'update' || issue.kind === 'missing'
-  return <Stack gap="xs">
-    {providers ? <Text size="xs" muted>{providers}</Text> : null}
-    {issue.requirement ? <Stack gap="none"><Text size="xs" muted>{issue.requirement.file + (issue.requirement.line ? ' · ' + (ko ? issue.requirement.line + '행' : 'line ' + issue.requirement.line) : '')}</Text><Text size="sm">{issue.requirement.field}</Text></Stack> : null}
-    {issue.kind === 'successor' && issue.line ? <Text muted size="xs">{ko ? 'SKILL.md ' + issue.line + '행의 권장 스킬' : 'Recommended in SKILL.md line ' + issue.line}</Text> : null}
-    {paths && issue.evidence.length && issue.kind !== 'missing' ? <Text size="xs" weight="semibold">{t.changes}</Text> : null}
-    {issue.evidence.map((evidence, i) => {
-      const line = issue.kind === 'missing' ? issue.lines?.[i] ?? (i === 0 ? issue.line : undefined) : undefined
-      const detail = issue.evidenceDetails?.find(entry => entry.path === evidence)
-      const sourceIds = detail?.ids ?? []
-      const copies = [...new Set(items.filter(item => sourceIds.includes(item.id)).flatMap(item => item.providers))]
-        .map(p => p === 'Shared' && ko ? '공용' : p)
-      const change = detail?.state === 'only' ? (copies.length ? (ko ? copies.join(' · ') + ' 원본에만 있음' : 'Only in ' + copies.join(' · ')) : ko ? '일부 원본에만 있음' : 'Present in some copies') :
-        detail ? (ko ? { added: '추가', removed: '제거', changed: '변경' } : { added: 'Added', removed: 'Removed', changed: 'Changed' })[detail.state] : undefined
-      return <Stack key={i} gap="none">
-        {line ? <Text muted size="xs">{ko ? 'SKILL.md ' + line + '행에서 참조' : 'Referenced at SKILL.md line ' + line}</Text> : null}
-        <Text size="sm">{paths ? evidence : reasonLabels[evidence] ?? evidence}</Text>
-        {change ? <Text size="xs" muted>{change}</Text> : null}
-      </Stack>
-    })}
-    {remainingEvidence ? <Text size="xs" muted>{ko ? '추가 파일 ' + remainingEvidence + '개' : englishCount(remainingEvidence, 'additional file')}</Text> : null}
-    {issue.workspaceCount !== undefined && ['update', 'conflict', 'variants'].includes(issue.kind)
-      ? <Text size="xs" muted>{ko ? t.locations + ' ' + issue.workspaceCount + '곳' : t.locations + ' ' + englishCount(issue.workspaceCount, 'workspace')}</Text> : null}
-    <Row gap="xs" wrap>
-      {canOpen && !isDeferred ? <Button size="sm" variant="outline" onPress={() => openSource(issue)}>{issue.kind === 'successor' ? (ko ? '두 스킬 비교' : 'Compare these skills') : issue.kind === 'missing' ? (ko ? '이 스킬 검토' : 'Review this skill') : issue.kind === 'update' ? t.updateAction : issue.kind === 'provider' ? t.providerAction : t.sources}</Button> : null}
-      <Button size="sm" variant="ghost" onPress={() => setAside(issue, isDeferred)}>{isDeferred ? t.restore : t.defer}</Button>
-    </Row>
-  </Stack>
+function sourceIds(issue: SkillReviewFinding): string[] {
+  if (issue.kind === 'variants' && issue.comparisonIds?.length === 2) return issue.comparisonIds
+  const source = issue.ids.find(id => id !== issue.successorId)
+  if (!source) return []
+  if (issue.successorId) return [source, issue.successorId]
+  if (issue.kind === 'variants' && issue.ids.length === 2) return issue.ids
+  return [source]
 }
 
-function Findings({ report, openSource, canOpen, items }: {
-  report: SkillReviewReport; openSource: OpenSource; canOpen: (issue: SkillReviewFinding) => boolean; items: CatalogItem[]
-}) {
+type OpenSource = (issue: SkillReviewFinding) => Promise<void>
+
+function Findings({ report, open }: { report: SkillReviewReport; open: (group: Group) => Promise<void> }) {
   const ko = panelLanguage(env.locale) === 'ko', t = ko ? labels.ko : labels.en
   const stamps = new Map(read(deferred))
   const pending = report.findings.filter(f => stamps.get(f.key) !== f.stamp)
@@ -142,77 +115,88 @@ function Findings({ report, openSource, canOpen, items }: {
   const groups = groupsFor(isDeferred ? report.findings.filter(f => stamps.get(f.key) === f.stamp) : pending)
   const maxPage = Math.max(0, Math.ceil(groups.length / pageSize) - 1)
   const currentPage = Math.min(read(page), maxPage)
-  const rows = groups.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
-  function changeList() { set(showDeferred, !isDeferred); set(expanded, null); set(page, 0) }
   const title = isDeferred ? t.deferred : groups.length ? (ko ? '확인할 스킬 ' + groups.length + '개' : englishCount(groups.length, 'skill') + ' to review')
     : !report.scanned ? t.empty : deferredCount || report.partial || report.skipped ? t.none : t.clean
   return <Stack gap="sm">
-    <Stack gap="xs">
-      <Heading level={2}>{title}</Heading>
-      <Text size="xs" muted>{ko ? '발견 ' + report.scanned + '개 · 이번 점검 ' + report.checked + '개' : englishCount(report.scanned, 'package') + ' found · ' + report.checked + ' checked this time'}</Text>
-      {report.skipped || report.partial ? <Text size="xs" tone="warning">{report.skipped ? (ko ? '점검 제외 ' + report.skipped + '개' : englishCount(report.skipped, 'package') + ' skipped') : t.partial}</Text> : null}
-    </Stack>
-    {rows.length ? <Box direction="column" border radius="sm">{rows.map((group, index) => {
-      const key = group.name.toLowerCase(), kinds = [...new Set(group.findings.map(f => f.kind))]
-      return <Stack key={key} gap="none">
-        {index ? <Separator /> : null}
-        <Box direction="column" padding="xs"><Collapsible title={group.name} description={kinds.map(kind => t[kind]).join(' · ')}
-          open={read(expanded) === key} onChange={open => set(expanded, open ? key : null)}>
-          <Box direction="column" padding="sm" gap="sm" radius="sm" background="muted">{group.findings.map((issue, i) => <Stack key={issue.key} gap="xs">
-            {i ? <Separator /> : null}
-            {group.findings.length > 1 ? <Text size="sm" weight="semibold">{t[issue.kind]}</Text> : null}
-            <Evidence issue={issue} isDeferred={isDeferred} openSource={openSource} items={items} canOpen={canOpen(issue)} />
-          </Stack>)}</Box>
-        </Collapsible></Box>
-      </Stack>
-    })}</Box> : null}
+    <Heading level={2}>{title}</Heading>
+    <Text size="xs" muted>{ko ? '설치본 ' + report.scanned + '개 검색 · 이번 점검 ' + report.checked + '개' :
+      englishCount(report.scanned, 'package') + ' found · ' + report.checked + ' checked this time'}</Text>
+    {report.skipped || report.partial ? <Text size="xs" tone="warning">{report.skipped ? (ko ? '점검 제외 ' + report.skipped + '개' : englishCount(report.skipped, 'package') + ' skipped') : t.partial}</Text> : null}
+    {groups.length ? <List label={title}>{groups.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map(group =>
+      <ListItem key={group.name} icon="file" title={group.name} description={[...new Set(group.findings.map(f => t[f.kind]))].join(' · ')}
+        onPress={() => open(group)} />)}</List> : null}
     {maxPage ? <Row justify="between" align="center" gap="xs"><Button size="sm" variant="ghost" disabled={!currentPage} onPress={() => set(page, currentPage - 1)}>{t.prev}</Button>
       <Text muted size="xs">{currentPage + 1} / {maxPage + 1}</Text><Button size="sm" variant="ghost" disabled={currentPage === maxPage} onPress={() => set(page, currentPage + 1)}>{t.next}</Button></Row> : null}
-    {deferredCount ? <Row><Button size="sm" variant="ghost" onPress={changeList}>{isDeferred ? t.back : t.deferred + ' · ' + deferredCount}</Button></Row> : null}
+    {deferredCount ? <Row><Button size="sm" variant="ghost" onPress={() => { set(showDeferred, !isDeferred); set(page, 0) }}>
+      {isDeferred ? t.back : t.deferred + ' · ' + deferredCount}</Button></Row> : null}
     {report.identicalGroups ? <Text muted size="xs">{ko ? '내용이 일치하는 원본 묶음 ' + report.identicalGroups + '개' : englishCount(report.identicalGroups, 'source group') + ' with matching copies'}</Text> : null}
   </Stack>
 }
 
-export function SkillReview({ workspaceId, items, selected, openSource, canOpen, onBack, onCheck, refreshing, loadFailed }: {
-  workspaceId: string | null; items: CatalogItem[]; selected: string[]; onBack: () => void; onCheck: () => Promise<void>; refreshing: boolean; loadFailed: boolean; openSource: OpenSource; canOpen: (issue: SkillReviewFinding) => boolean
+export function SkillReview({ workspaceId, items, selected, openSource, canOpen, onCheck, refreshing, loadFailed }: {
+  workspaceId: string | null; items: CatalogItem[]; selected: string[]; onCheck: () => Promise<void>; refreshing: boolean; loadFailed: boolean; openSource: OpenSource; canOpen: (issue: SkillReviewFinding) => boolean
 }) {
   const ko = panelLanguage(env.locale) === 'ko', t = ko ? labels.ko : labels.en
-  const data = read(review), current = read(status)
-  async function compareOrOpen(issue: SkillReviewFinding) {
-    if (issue.kind !== 'missing' && issue.kind !== 'successor') {
-      if (read(sourceStatus) === 'loading') return
-      const request = epoch
-      set(sourceStatus, 'loading')
-      try { await openSource(issue); if (request === epoch) set(sourceStatus, 'idle') }
-      catch { if (request === epoch) set(sourceStatus, 'changed') }
-      return
-    }
-    const original = issue.ids.find(id => id !== issue.successorId && items.some(item => item.kind === 'skill' && item.id === id))
-    if (!original) return
-    openSkillComparison(issue.successorId ? [original, issue.successorId] : [original])
-    set(comparing, true)
+  const data = read(review), current = read(status), group = read(focused)
+  function back() {
+    resetReviewAssistant(); set(sourceStatus, 'idle'); set(focused, null); set(screen, 'findings')
   }
-  if (read(comparing) && workspaceId) return <Stack gap="sm">
-    <Row><Button size="sm" variant="ghost" onPress={() => { set(comparing, false); resetReviewAssistant() }}>{ko ? '점검 결과로' : 'Back to findings'}</Button></Row>
-    <ReviewAssistant workspaceId={workspaceId} items={items} selected={selected} />
+  function pick(compareWith?: string) {
+    resetReviewAssistant(); set(baseline, compareWith); set(focused, null); set(screen, 'picker')
+  }
+  async function inspect(ids: string[], group?: Group) {
+    if (!workspaceId) return
+    set(focused, group ?? null); set(focusedIds, ids); set(sourceStatus, 'idle'); set(screen, 'result')
+    if (ids.length) await inspectSelection(workspaceId, ids)
+    else resetReviewAssistant()
+  }
+  function openGroup(group: Group) {
+    const issue = group.findings.find(f => f.kind === 'successor') ?? group.findings.find(f => f.kind === 'variants') ?? group.findings[0]
+    return inspect(sourceIds(issue), group)
+  }
+  async function showSource(issue: SkillReviewFinding) {
+    if (read(sourceStatus) === 'loading') return
+    const request = epoch
+    set(sourceStatus, 'loading')
+    try { await openSource(issue); if (request === epoch) set(sourceStatus, 'idle') }
+    catch { if (request === epoch) set(sourceStatus, 'changed') }
+  }
+  function actions() {
+    if (!group) return null
+    const stamps = new Map(read(deferred))
+    const activeIds = read(focusedIds)
+    const presented = group.findings.filter(f => activeIds.length ? f.ids.some(id => activeIds.includes(id)) : !f.ids.length)
+    const otherCopies = group.findings.filter(f => !presented.includes(f))
+    const isDeferred = presented.every(f => stamps.get(f.key) === f.stamp)
+    return <Stack gap="xs">
+      {otherCopies.length ? <List label={ko ? '같은 이름의 다른 설치본' : 'Other installations with this name'}>{otherCopies.map(f =>
+        <ListItem key={f.key} title={t[f.kind]} description={f.providers.join(' · ')} onPress={() => inspect(sourceIds(f), group)} />
+      )}</List> : null}
+      {presented.filter(f => f.kind !== 'excluded' && f.kind !== 'successor' && f.kind !== 'missing').map(f => <Stack gap="xs" key={f.key}>
+        {f.workspaceCount !== undefined && ['update', 'conflict', 'variants'].includes(f.kind) ?
+          <Text muted size="xs">{ko ? t.locations + ' ' + f.workspaceCount + '곳' : t.locations + ' ' + englishCount(f.workspaceCount, 'workspace')}</Text> : null}
+        {canOpen(f) && !isDeferred ? <Row><Button size="sm" variant="outline" disabled={read(sourceStatus) === 'loading'} onPress={() => showSource(f)}>
+          {f.kind === 'update' ? t.updateAction : f.kind === 'provider' ? t.providerAction : t.sources}</Button></Row> : null}
+      </Stack>)}
+      {read(sourceStatus) === 'changed' ? <Text tone="warning" size="sm">{ko ? '원본이 바뀌었을 수 있습니다. 목록에서 다시 점검해 주세요.' : 'The source may have changed. Check again from the list.'}</Text> : null}
+      <Row><Button size="sm" variant="ghost" onPress={() => { for (const issue of presented) setAside(issue, isDeferred); back() }}>
+        {isDeferred ? t.restore : t.defer}</Button></Row>
+    </Stack>
+  }
+  if (workspaceId && read(screen) !== 'findings') return <Stack gap="sm">
+    <Row><Button size="sm" variant="ghost" onPress={back}>{ko ? '점검 목록으로' : 'Back to findings'}</Button></Row>
+    {read(screen) === 'picker' ? <SkillPicker items={items} compareWith={read(baseline)} onPick={ids => inspect(ids)} /> :
+      group && !read(focusedIds).length ? <Stack gap="sm"><Heading level={2}>{group.name}</Heading>
+        {group.findings.filter(f => !f.ids.length).map(f => <Text size="sm" key={f.key}>{f.evidence.map(reason => (t as Record<string, string>)[reason] ?? reason).join(' · ')}</Text>)}
+        {actions()}</Stack> : <InspectionResult workspaceId={workspaceId} items={items} onCompare={pick} actions={actions()} />}
   </Stack>
   return <Stack gap="sm">
-    <Row justify="between" align="center" gap="xs" wrap>
-      <Button size="sm" variant="ghost" icon="blocks" onPress={onBack}>{ko ? '공용 도구로' : 'Back to library'}</Button>
-      {data && current === 'ready' && !refreshing && !loadFailed ? <Button size="sm" variant="ghost" icon="refresh" onPress={onCheck}>{t.rescan}</Button> : null}
-    </Row>
-    {read(sourceStatus) === 'changed' ? <Text tone="warning" size="sm">{ko ? '원본을 열 수 없습니다. 다시 점검해 주세요.' : 'This source could not be opened. Check again to refresh it.'}</Text> : null}
-    {read(sourceStatus) === 'loading' ? <Text muted size="xs">{ko ? '원본 확인 중…' : 'Opening sources…'}</Text> : null}
+    {workspaceId ? <Row justify="between" align="center" wrap gap="xs">
+      <Button size="sm" variant="outline" icon="search" disabled={refreshing || loadFailed || !items.some(item => item.kind === 'skill')} onPress={() => pick()}>{ko ? '스킬 직접 선택' : 'Choose a skill'}</Button>
+      {data && current === 'ready' && !refreshing && !loadFailed ? <Button size="sm" variant="ghost" icon="refresh" onPress={onCheck}>{t.rescan}</Button> : null}</Row> : null}
     {!workspaceId ? <EmptyState icon="folder" title={t.choose} /> : current === 'loading' || refreshing ? <Text size="sm" muted>{t.loading}</Text>
       : current === 'error' || loadFailed ? <Callout tone="warning"><Text size="sm">{t.error}</Text><Button size="sm" onPress={onCheck}>{t.rescan}</Button></Callout>
-      : data ? <Findings report={data} items={items} openSource={compareOrOpen} canOpen={issue => {
-        if (issue.kind === 'missing' || issue.kind === 'successor') {
-          const isSkill = (id: string) => items.some(item => item.kind === 'skill' && item.id === id)
-          return issue.ids.some(id => id !== issue.successorId && isSkill(id)) && (issue.kind === 'missing' || !!issue.successorId && isSkill(issue.successorId))
-        }
-        return canOpen(issue)
-      }} />
-      : <Button size="sm" variant="outline" onPress={onCheck}>{t.start}</Button>}
-    {workspaceId ? <ReviewAssistant workspaceId={workspaceId} items={items} selected={selected} /> : null}
+      : data ? <Findings report={data} open={openGroup} /> : <Button size="sm" variant="outline" onPress={onCheck}>{t.start}</Button>}
+    {workspaceId ? <RecommendationPreviewPanel items={items} selected={selected} workspaceId={workspaceId} /> : null}
   </Stack>
 }

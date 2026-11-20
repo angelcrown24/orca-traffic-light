@@ -10,7 +10,7 @@ const rulesVersion = 1
 const reasons = new Set(['skill-execution', 'explicit-invocation', 'native-tool'])
 const providerNames = new Set(['Shared', 'Claude Code', 'Codex', 'Antigravity', 'Gemini CLI'])
 const sensitive = /(?:github_pat_|gh[pousr]_|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16}|xox[baprs]-|eyJ[A-Za-z0-9_-]{12,}\.)/i
-const safeName = value => typeof value === 'string' && /^[\p{L}\p{N}][\p{L}\p{N}_. -]{0,99}$/u.test(value) && !sensitive.test(value) ? value : 'Skill'
+export const safeName = value => typeof value === 'string' && /^[\p{L}\p{N}][\p{L}\p{N}_. -]{0,99}$/u.test(value) && !sensitive.test(value) ? value : 'Skill'
 
 function safeRelative(value) {
   return value.length <= 160 && !sensitive.test(value) && value.split('/').every(part =>
@@ -224,9 +224,11 @@ export function createSkillReviewer({ home } = {}) {
         versions.get(key).push(row)
       }
       if (versions.size > 1) {
+        const [first, second] = versions.values()
         const details = differenceDetails(group.map(row => row.pkg), group.map(row => row.item.id))
-        findings.push(finding('variants', group.map(row => row.item), details.map(detail => detail.path),
-          group.map(row => [row.item.id, row.pkg.fingerprint]).sort(), { details }))
+        const row = finding('variants', group.map(row => row.item), details.map(detail => detail.path),
+          group.map(row => [row.item.id, row.pkg.fingerprint]).sort(), { details })
+        findings.push({ ...row, comparisonIds: [first[0].item.id, second[0].item.id] })
       } else if (group.length > 1 && !incompleteNames.has(group[0].item.name.trim().toLowerCase())) identicalGroups++
       for (const copies of versions.values()) {
         const { missing, fingerprint, successors } = copies[0].pkg

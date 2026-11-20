@@ -88,7 +88,7 @@ export default defineCheck({
     { ...catalog.items[0], id: 'release', name: 'release-check', providers: ['Shared', 'Claude Code'], sharing: { state: 'update', canSync: true } },
     { ...catalog.items[0], id: 'handoff', name: 'handoff-notes' },
     { ...catalog.items[0], id: 'handoff-v2', name: 'handoff-notes-v2' }
-  ] }) }, persisted: { workspace: { 'traffic-light.tab': 'library', 'traffic-light.library-view': 'review' } } },
+  ] }) }, persisted: { workspace: { 'traffic-light.tab': 'review' } } },
   import: { requests: { ...requests, 'toolbox.catalog': () => ({ ...catalog, items: [
     ...catalog.items, { ...catalog.items[1], id: 'figma-other', providers: ['Gemini CLI'], source: 'Provider settings', sharing: { state: 'provider', canSync: true } },
     { ...catalog.items[1], id: 'blender', name: 'blender', providers: ['Claude Code'], source: 'Provider settings', sharing: { state: 'provider', canSync: true } },

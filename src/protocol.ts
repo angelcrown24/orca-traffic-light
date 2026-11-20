@@ -1,7 +1,7 @@
 import type { NativeResult } from './native-reader'
 import type { SessionShells } from './session-shells'
 import type { ResourceObservation } from './resource-classifier'
-import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis } from './toolbox-types'
+import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis, SkillInspection } from './toolbox-types'
 export type Call = { id: string; tool: string; agent: string; state: 'running' | 'finished' | 'uncertain'; startedAt?: number }
 export {}
 declare module 'orca' {
@@ -17,6 +17,7 @@ declare module 'orca' {
     'toolbox.automation': { input: { workspaceId: string; enabled: boolean }; output: ToolboxState }
     'toolbox.skillReview': { input: { workspaceId: string }; output: SkillReviewReport }
     'toolbox.previewSkills': { input: RecommendationPreviewInput; output: RecommendationPreview }
+    'toolbox.inspectSkills': { input: SkillAnalysisInput; output: SkillInspection }
     'toolbox.reviewSkills': { input: SkillAnalysisInput; output: SkillAnalysis }
     'toolbox.copySkillReview': { input: SkillAnalysisInput; output: { copied: boolean; prompt: string } }
     'toolbox.compare': { input: { id: string }; output: ToolboxComparison }

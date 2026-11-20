@@ -40,6 +40,17 @@ test('a review cannot return results from a workspace that changed during an imp
   await assert.rejects(f.manager.skillReview({ workspaceId: 'one' }), /Workspace changed/)
 })
 
+test('selected inspection uses the local workspace and returns coverage without a generation model', async t => {
+  const f = fixture()
+  t.after(() => f.manager.dispose())
+  const result = await f.manager.inspectSkills({ workspaceId: 'one', ids: [id], language: 'ko' })
+  assert.deepEqual(result.skills, [{ id, name: 'example', providers: ['Shared'] }])
+  assert.match(result.evidence[0].detail, /64 KiB/)
+  f.focus('remote')
+  await assert.rejects(f.manager.inspectSkills({ workspaceId: 'remote', ids: [id], language: 'ko' }), /local Orca workspace/)
+  assert.equal(f.scans(), 1)
+})
+
 test('a truncated workspace list leaves the impact count unknown', async t => {
   const f = fixture({ getWorkspaces: async () => ({ truncated: true, workspaces: [{ id: 'one', hostId: 'local' }] }) })
   t.after(() => f.manager.dispose())

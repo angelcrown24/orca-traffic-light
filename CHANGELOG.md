@@ -1,5 +1,11 @@
 # Release history
 
+## [v0.12.1](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.12.1) · One-click skill review
+
+- Open **Review** directly after **Library**. Select any finding to see its evidence and suggested action immediately, including on machines without a local AI model.
+- Review a skill by name or compare two installations. Additional AI analysis supports both local text models and Kev’s passage selection.
+- Fixed loading when reopening the sidebar with Review selected, and cleared stale results when switching workspaces.
+
 ## [v0.12.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.12.0) · Review installed skills
 
 - Open **Library → Skill review** to inspect installed packages across providers. See differences, missing local references, documented successors, provider requirements, shared updates and coverage gaps with supporting evidence.
