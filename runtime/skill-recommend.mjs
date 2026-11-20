@@ -14,7 +14,7 @@ function loopbackOrigin(value) {
   } catch { return null }
 }
 
-function localJson(url, payload, timeout) {
+export function localJson(url, payload, timeout) {
   return new Promise((resolve, reject) => {
     const req = request(url, {
       agent: false, method: payload ? 'POST' : 'GET', signal: AbortSignal.timeout(timeout),

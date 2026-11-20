@@ -1,5 +1,11 @@
 # Release history
 
+## [v0.12.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.12.0) · Review installed skills
+
+- Open **Library → Skill review** to inspect installed packages across providers. See differences, missing local references, documented successors, provider requirements, shared updates and coverage gaps with supporting evidence.
+- Review a shared update, compare sources, or set a finding aside for this version. Matching provider copies are summarized together.
+- Preview the workspace’s recommendations with a sample task and a temporary description. Select one or two skills for an optional local AI review or copy a scoped request for your agent.
+
 ## [v0.11.2](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.11.2) · Show tool names under each working chat
 
 - Session activity displays named live tools, including reads, searches, edits, shell calls and identified MCP tools. Concurrent calls to the same read or edit tool share a count under their owner.

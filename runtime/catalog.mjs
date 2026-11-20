@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import { open, opendir, realpath } from 'node:fs/promises'
+import { open, opendir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import toml from './vendor/smol-toml.cjs'
@@ -18,7 +18,7 @@ const stable = (value) => JSON.stringify(value, (_, part) => plain(part)
 const clean = (value, limit) => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit)
 const fail = (code, message) => Object.assign(new Error(message), { code })
 
-async function readBounded(path, limit) {
+export async function readBounded(path, limit) {
   const handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
   try {
     const info = await handle.stat()
@@ -193,6 +193,7 @@ async function configServers(path, format) {
 export async function scanCatalog({ home = homedir() } = {}) {
   home = await realpath(home).catch(() => resolve(home))
   const items = [], warnings = [], records = new Map(), skillItems = new Map(), mcpItems = new Map()
+  const exclusions = new Map()
   let inspected = 0
   const skillRoots = [
     ['.agents/skills', 'Shared'], ['.codex/skills', 'Codex'], ['.claude/skills', 'Claude Code'],
@@ -207,8 +208,9 @@ export async function scanCatalog({ home = homedir() } = {}) {
       if (visited.has(canonical)) return
       visited.add(canonical)
       const skillPath = join(canonical, 'SKILL.md')
+      let resolved
       try {
-        const resolved = await realpath(skillPath)
+        resolved = await realpath(skillPath)
         const content = await readBounded(resolved, SKILL_LIMIT)
         const existing = skillItems.get(resolved)
         if (existing) {
@@ -222,7 +224,21 @@ export async function scanCatalog({ home = homedir() } = {}) {
         }
         return
       } catch (error) {
-        if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') { warnings.push(`Skipped an unreadable or oversized skill in ${root}.`); return }
+        if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') {
+          warnings.push(`Skipped an unreadable or oversized skill in ${root}.`)
+          const id = 'skill:' + hash(resolved ?? skillPath).slice(0, 24)
+          const prior = exclusions.get(id)
+          if (prior) {
+            if (!prior.providers.includes(provider)) prior.providers.push(provider)
+          } else {
+            const info = await stat(resolved ?? skillPath).catch(() => null)
+            const name = basename(canonical)
+            exclusions.set(id, { id, name: /^[a-z0-9][a-z0-9._-]{0,99}$/i.test(name) ? name : id,
+              reason: info?.isFile() && info.size > SKILL_LIMIT ? 'too-large' : 'unreadable', providers: [provider],
+              stamp: hash(JSON.stringify([id, info?.size, info?.mtimeMs, info?.ctimeMs, error.code])) })
+          }
+          return
+        }
       }
       let directory
       try {
@@ -274,7 +290,7 @@ export async function scanCatalog({ home = homedir() } = {}) {
     if (Object.keys(servers).length > 300) warnings.push(`MCP inventory from ${relative} was limited to 300 entries.`)
   }
   items.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
-  return decorateSharing({ items, warnings: [...new Set(warnings)], records }, home)
+  return decorateSharing({ items, warnings: [...new Set(warnings)], records, skillExclusions: [...exclusions.values()] }, home)
 }
 
 export async function resolveRecord(record) {

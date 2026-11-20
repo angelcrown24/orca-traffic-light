@@ -131,3 +131,18 @@ test('bounds files, treats malformed definitions as unavailable and keeps parser
   assert.equal(JSON.stringify({ items, warnings }).includes('SECRET_IN_ERROR'), false)
   assert.equal(JSON.stringify({ items, warnings }).includes('SOME_SECRET'), false)
 })
+
+test('retains one review-only oversized-package record for aliases without reading it into the catalog', async t => {
+  const f = await fixture(t)
+  await f.put('.agents/skills/large/SKILL.md', 'x'.repeat(65537))
+  await f.link('.claude/skills/also-large', '.agents/skills/large')
+  const { items, records, skillExclusions } = await scanCatalog({ home: f.home })
+  assert.equal(items.length, 0)
+  assert.equal(records.size, 0)
+  assert.equal(skillExclusions.length, 1)
+  const [excluded] = skillExclusions
+  assert.deepEqual([excluded.name, excluded.reason, excluded.providers], ['large', 'too-large', ['Shared', 'Claude Code']])
+  assert.ok(!JSON.stringify(excluded).includes(f.home))
+  await f.put('.agents/skills/large/SKILL.md', '---\nname: readable\n---')
+  assert.equal((await scanCatalog({ home: f.home })).skillExclusions.length, 0)
+})

@@ -89,7 +89,7 @@ export function sortImports(groups: SourceGroup[]): SourceGroup[] {
 function providers(items: CatalogItem[]): string {
   return [...new Set(items.flatMap(item => item.providers).filter(name => name !== 'Shared').map(name => name.replace(/\s+(Code|CLI)$/, '')))].join(' · ')
 }
-async function openDetails(group: SourceGroup) {
+export async function openImportDetails(group: SourceGroup) {
   const request = ++generation
   clearAdaptation()
   set(expanded, group.key)
@@ -122,7 +122,7 @@ function Sources({ group, workspaceId, disabled, add }: SourceProps) {
   const identical = group.items.length > 1 && verified.length === group.items.length && new Set(verified.map(variant)).size === 1
   return <Stack gap="sm">
     {check === 'loading' ? <Text muted size="sm">{t.checking}</Text> : null}
-    {check === 'error' ? <Row gap="sm" align="center"><Text tone="warning" size="sm">{t.failed}</Text><Button size="sm" onPress={() => openDetails(group)}>{t.retry}</Button></Row> : null}
+    {check === 'error' ? <Row gap="sm" align="center"><Text tone="warning" size="sm">{t.failed}</Text><Button size="sm" onPress={() => openImportDetails(group)}>{t.retry}</Button></Row> : null}
     {result?.differences.length ? <Text size="xs" muted>{t.diff + ' · ' + result.differences.map(field => t[field]).join(', ')}</Text> : identical ? <Text size="xs" muted>{t.identical}</Text> : null}
     {group.items.map(item => {
       if (item.providerOnly) return <Box key={item.id} direction="column" padding="sm" gap="xs" radius="sm" background="muted">
@@ -186,9 +186,9 @@ export function ImportRow({ group, workspaceId, added, receipt, disabled, add }:
       {added || (!open && review === 'same') ? <Badge tone="success">{added ? t.added : t.same}</Badge> : <Button
         icon={action === 'add' ? 'add' : open ? 'collapse' : 'expand'} size="sm" variant={action === 'add' ? 'outline' : 'ghost'}
         disabled={action === 'add' && disabled} onPress={() => {
+          if (open) return closeImportDetails()
           if (action === 'add') return add(group.items[0].id)
-          if (open) closeImportDetails()
-          else return openDetails(group)
+          return openImportDetails(group)
         }}>{open ? t.close : review === 'different' ? t.viewDiff : t[action]}</Button>}
     </Row>
     {!added && receipt ? <Text size="xs" tone="success">{[t.added, providers(receipt.items)].filter(Boolean).join(' · ')}</Text> : null}

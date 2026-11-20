@@ -38,6 +38,16 @@ Shared MCP connections answer server health checks. When the server reports a ch
 
 The runner supports stdio and Streamable HTTP with MCP protocol versions `2024-11-05`, `2025-03-26`, and `2025-06-18`. Legacy SSE, servers that require a newer protocol, provider-managed OAuth, proprietary built-ins, and unsupported per-tool policies require a compatible native connector or adapter. Disabled entries stay unavailable. Stdio commands receive basic operating-system variables and environment entries explicitly supplied or inherited by their configuration.
 
+## Skill review
+
+The Library checks locally discovered skill packages on demand. Multiple provider links to one canonical installation count once. Separate packages with the same name are compared across their files, contents, internal links and permissions. A finding can show a changed path and which sources contain it. Registered updates compare the original against the current shared snapshot. Updates opened from a verified review are pinned to the source revision that was inspected.
+
+The reference check examines explicit package paths in skill instructions and skips fenced examples. A successor finding requires an installed target explicitly recommended by the original instructions. Each finding carries its supporting file, line or filenames when available. Provider-specific settings, excluded packages and shared conflicts have separate explanations. File age and the limited Activity history never trigger retirement. Review can show how many listed local workspaces have selected the affected package when the workspace list and its saved selections are available.
+
+The worker caches package inspection results in memory and checks metadata on the next pass. Restarting the worker starts a new baseline. The panel stores deferred finding identifiers and revisions per workspace. Confirmed evidence changes make a deferred finding visible again. Discovery limits and unreadable packages appear in the coverage summary.
+
+A recommendation preview uses the eligible items in the workspace selection. It labels the local Kev or keyword method for each ranking. Editing a description in the preview changes only the simulated ranking. An optional content review sends up to 6,000 characters per selected instruction file to a locally installed completion model through Ollama at `127.0.0.1:11434`. The separate clipboard action includes file locations for the selected skills. The reader chooses the conversation and provider that receive the request.
+
 ## Agent connection
 
 **Connect** installs a managed block in `~/.agents/AGENTS.md` and the launcher at `~/.agents/traffic-light/auto-cli.mjs`. Setup preserves instruction symlinks and installs short bridges in the Codex, Gemini, and Claude user instruction files where needed. Gemini and Antigravity share the `~/.gemini/GEMINI.md` bridge. The plugin backs up existing instructions and reports a conflict if a managed block has been edited. These operations leave provider MCP and authentication settings intact.

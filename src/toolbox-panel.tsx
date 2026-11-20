@@ -3,8 +3,10 @@ import { englishCount, panelLanguage } from './panel-language'
 import { clearAdaptation, limitationLabel, ProviderAdaptation } from './provider-adaptation'
 import type { CatalogItem, SyncResult, ToolboxCatalog, ToolboxState } from './toolbox-types'
 import './protocol'
+import { SkillReview, checkSkills, resetSkillReview } from './skill-review'
+import type { SkillReviewFinding } from './toolbox-types'
 import { ArchitectureDiagram } from './toolbox-architecture'
-import { alreadyShared, closeImportDetails, resetImportReviews, ImportRow, isShared, needsImport, sectionTitle, sortImports, sourceGroups, type SourceGroup } from './toolbox-import'
+import { alreadyShared, closeImportDetails, resetImportReviews, openImportDetails, ImportRow, isShared, needsImport, sectionTitle, sortImports, sourceGroups, type SourceGroup } from './toolbox-import'
 
 const catalog = atom<ToolboxCatalog>({ items: [], warnings: [] })
 const state = atom<ToolboxState>({ workspaceId: null, selected: [], bundle: null, events: [] })
@@ -16,7 +18,8 @@ const syncResults = atom<SyncResult[]>([])
 const query = atom('')
 const kind = atom('all')
 const selectedOnly = atom(false)
-const libraryMode = atom<'store' | 'import'>('traffic-light.library-view', 'store', { persist: 'workspace' })
+const libraryMode = atom<'store' | 'import' | 'review'>('traffic-light.library-view', 'store', { persist: 'workspace' })
+const previousView = atom<'store' | 'import'>('store')
 const receipts = atom<SourceGroup[]>([])
 const page = atom(0)
 const expandedItem = atom<string | null>(null)
@@ -25,7 +28,9 @@ const manualOpen = atom('traffic-light.manual-open', false, { persist: 'workspac
 const copyStatus = atom<'idle' | 'copying' | 'copied' | 'failed'>('idle')
 let epoch = 0
 let stateRead = 0
+let reviewedUpdate: { workspaceId: string; itemId: string; stamp: string } | null = null
 let canRead = () => false
+let canReview = () => false
 
 const copy = {
   en: {
@@ -74,13 +79,19 @@ const copy = {
 const text = () => copy[panelLanguage(env.locale)]
 
 export async function openToolbox(force = false): Promise<void> {
-  if (!force && read(loaded)) { await refreshState(); return }
+  if (!force && read(loaded)) {
+    await refreshState()
+    if (canReview()) await checkSkills(read(state).workspaceId)
+    return
+  }
   const request = ++epoch
+  reviewedUpdate = null
   set(loading, true); set(failure, ''); set(page, 0); set(copyStatus, 'idle'); set(receipts, []); set(syncResults, []); resetImportReviews()
   try {
     const [library, selection] = await Promise.all([plugin.request('toolbox.catalog'), plugin.request('toolbox.state')])
     if (request !== epoch) return
     set(catalog, library); set(state, selection); set(loaded, true)
+    if (canReview()) await checkSkills(selection.workspaceId, force)
   } catch { if (request === epoch) set(failure, 'load') }
   finally { if (request === epoch) set(loading, false) }
 }
@@ -95,17 +106,24 @@ async function refreshState(): Promise<void> {
     }
   } catch { if (request === stateRead && generation === epoch) set(failure, 'state') }
 }
-export function setupToolbox(ctx: PanelContext, isActive: () => boolean): void {
-  canRead = () => isActive() && read(ctx.visible)
+export function leaveLibrary() {
+  reviewedUpdate = null
+  resetSkillReview()
+}
+export function setupToolbox(ctx: PanelContext, currentTab: () => string): void {
+  canRead = () => ['library', 'structure'].includes(currentTab()) && read(ctx.visible)
+  canReview = () => read(ctx.visible) && currentTab() === 'library' && read(libraryMode) === 'review'
   ctx.subscriptions.push(plugin.on('toolbox.changed', () => { if (canRead()) void refreshState() }))
   ctx.subscriptions.push(on('workspace.changed', ({ context }) => {
     if (context?.workspaceId && context.workspaceId === read(state).workspaceId) return
     epoch++
+    reviewedUpdate = null
+    resetSkillReview()
     set(state, { workspaceId: null, selected: [], bundle: null, events: [] })
     set(busy, false); set(loading, false); set(failure, ''); set(copyStatus, 'idle'); set(syncResults, []); set(query, ''); set(selectedOnly, false); set(kind, 'all'); set(receipts, []); resetImportReviews(); set(page, 0); set(expandedItem, null); set(settingsOpen, null)
     if (canRead()) void openToolbox()
   }))
-  ctx.subscriptions.push({ dispose: () => { epoch++; canRead = () => false } })
+  ctx.subscriptions.push({ dispose: () => { epoch++; reviewedUpdate = null; canRead = () => false; canReview = () => false; resetSkillReview() } })
   if (canRead()) void openToolbox()
 }
 function LoadFailure() {
@@ -171,7 +189,9 @@ async function importSource(group: SourceGroup, id: string): Promise<void> {
   const request = ++epoch
   set(busy, true); set(failure, ''); set(syncResults, []); set(copyStatus, 'idle')
   try {
-    const result = await plugin.request('toolbox.sync', { workspaceId: current.workspaceId, ids: [id], preserveProviderCopies: true })
+    const stamp = reviewedUpdate?.workspaceId === current.workspaceId && reviewedUpdate.itemId === id ? reviewedUpdate.stamp : undefined
+    const result = await plugin.request('toolbox.sync', { workspaceId: current.workspaceId, ids: [id], preserveProviderCopies: true,
+      ...(stamp ? { reviewedSourceStamp: stamp } : {}) })
     if (request !== epoch) return
     set(catalog, result.catalog); set(syncResults, result.results); resetImportReviews()
     if (result.results.some(row => row.id === id && (row.status === 'synced' || row.status === 'unchanged'))) {
@@ -276,9 +296,14 @@ function ConnectionSettings() {
     </Stack></Collapsible>
   </Stack>
 }
-function changeView(value: 'store' | 'import') {
+function changeView(value: 'store' | 'import' | 'review') {
+  const previous = read(libraryMode)
+  reviewedUpdate = null
+  if (value === 'review' && previous !== 'review') set(previousView, previous)
+  if (previous === 'review' && value !== 'review') resetSkillReview()
   set(libraryMode, value); set(page, 0); set(kind, 'all'); set(query, ''); set(selectedOnly, false)
   set(expandedItem, null); set(receipts, []); set(syncResults, []); closeImportDetails()
+  if (value === 'review') return openToolbox(true)
 }
 
 function StoreRow({ group }: { group: SourceGroup }) {
@@ -291,12 +316,13 @@ function StoreRow({ group }: { group: SourceGroup }) {
 export function ToolboxPanel() {
   const ko = panelLanguage(env.locale) === 'ko', t = text(), current = read(state), items = read(catalog).items
   if (!read(loaded)) return read(failure) === 'load' ? <LoadFailure /> : <Text muted size="sm">{t.loading}</Text>
-  const automation = current.automation, importing = read(libraryMode) === 'import'
+  const automation = current.automation, importing = read(libraryMode) === 'import', reviewing = read(libraryMode) === 'review'
   const appliedCount = automation?.appliedIds?.length ?? 0
   const enabledLabel = importing || appliedCount !== current.selected.length ? `${t.autoOn} · ${appliedCount}` : t.autoOn
   const showSettings = read(settingsOpen) ?? read(manualOpen)
   const store = sourceGroups(items.filter(isShared))
-  const imports = sourceGroups(items).filter(needsImport)
+  const allGroups = sourceGroups(items)
+  const imports = allGroups.filter(needsImport)
   const completed = new Map(read(receipts).map(group => [group.key, group]))
   const outstanding = new Set(imports.map(group => group.key))
   const pendingImports = sortImports(imports.filter(group => !alreadyShared(group)))
@@ -314,19 +340,46 @@ export function ToolboxPanel() {
   const typeFilters = [{ value: 'all', label: t.allShort }, { value: 'skill', label: t.skills }, { value: 'mcp', label: 'MCP' }]
   const unsuccessful = read(syncResults).filter(row => row.status === 'conflict' || row.status === 'failed')
   const importCount = pendingImports.length
+  function reviewGroup(finding: SkillReviewFinding) {
+    if (finding.kind === 'excluded' || finding.kind === 'missing') return
+    return allGroups.find(group => group.items.some(item => finding.ids.includes(item.id)))
+  }
+  async function showSource(finding: SkillReviewFinding) {
+    if (!current.workspaceId) return
+    const workspaceId = current.workspaceId, request = epoch
+    const library = await plugin.request('toolbox.catalog')
+    if (request !== epoch || read(state).workspaceId !== workspaceId || !canReview()) return
+    const group = sourceGroups(library.items).find(group => group.items.some(item => finding.ids.includes(item.id)))
+    if (!group) throw new Error('review-source-changed')
+    set(catalog, library)
+    if (needsImport(group)) {
+      changeView('import')
+      set(kind, 'skill'); set(query, group.name)
+      if (finding.kind === 'update' && finding.ids.length === 1 && finding.reviewedSourceStamp) {
+        reviewedUpdate = { workspaceId, itemId: finding.ids[0], stamp: finding.reviewedSourceStamp }
+      }
+      await openImportDetails(group)
+    } else {
+      changeView('store')
+      set(kind, 'skill'); set(query, group.name)
+      set(expandedItem, group.items.find(item => finding.ids.includes(item.id))?.id ?? null)
+    }
+  }
   return <Stack gap="sm">
-    <Row justify="between" align="center" gap="xs">
+    {!reviewing ? <Row justify="between" align="center" gap="xs" wrap>
       <Row gap="xs" align="center"><Text muted size="sm">{t.autoTitle}</Text><Badge tone={automation?.enabled ? 'success' : 'neutral'}>{automation?.enabled ? enabledLabel : t.autoOff}</Badge></Row>
-      <Row gap="xs">
+      <Row gap="xs" align="center">
+        <Button size="sm" icon="search" variant="outline" onPress={() => changeView('review')}>{ko ? '스킬 점검' : 'Skill review'}</Button>
         <IconButton icon="refresh" label={t.refresh} tooltip={t.refresh} size="sm" variant="ghost" disabled={read(loading) || read(busy)} onPress={() => openToolbox(true)} />
         <IconButton icon="settings" label={t.settings} tooltip={t.settings} size="sm" variant="ghost" tone={showSettings ? 'accent' : 'neutral'} onPress={() => set(settingsOpen, !showSettings)} />
       </Row>
-    </Row>
-    {showSettings ? <Box direction="column" gap="sm" padding="sm" border radius="sm"><Text weight="semibold" size="sm">{t.settings}</Text><ConnectionSettings /></Box> : null}
-    <Row gap="xs" wrap>
+    </Row> : null}
+    {!reviewing && showSettings ? <Box direction="column" gap="sm" padding="sm" border radius="sm"><Text weight="semibold" size="sm">{t.settings}</Text><ConnectionSettings /></Box> : null}
+    {!reviewing ? <Row gap="xs" wrap>
       <Button size="sm" icon={importing ? 'blocks' : 'check'} variant={importing ? 'ghost' : 'solid'} tone={importing ? 'neutral' : 'accent'} onPress={() => { if (importing) changeView('store') }}>{(ko ? '공용 보관함 ' : 'Shared library ') + store.length}</Button>
       <Button size="sm" icon={importing ? 'check' : 'download'} variant={importing ? 'solid' : 'ghost'} tone={importing ? 'accent' : 'neutral'} onPress={() => { if (!importing) changeView('import') }}>{(ko ? '가져오기 ' : 'Import ') + importCount}</Button>
-    </Row>
+    </Row> : null}
+    {reviewing ? <SkillReview onCheck={() => openToolbox(true)} refreshing={read(loading)} loadFailed={read(failure) === 'load'} onBack={() => changeView(read(previousView))} workspaceId={current.workspaceId} items={items} selected={current.selected} openSource={showSource} canOpen={finding => !!reviewGroup(finding)} /> : <Stack gap="sm">
     <Input label={t.search} labelHidden value={read(query)} type="search" placeholder={t.searchPlaceholder} onChange={value => { set(query, value); set(page, 0) }} />
     <Row gap="xs" wrap>
       {typeFilters.map(filter => <Button key={filter.value} size="sm" variant={read(kind) === filter.value ? 'outline' : 'ghost'} icon={read(kind) === filter.value ? 'check' : undefined} tooltip={t.filter + ' · ' + filter.label} onPress={() => { set(kind, filter.value); set(page, 0) }}>{filter.label}</Button>)}
@@ -348,6 +401,7 @@ export function ToolboxPanel() {
       : importing ? <EmptyState icon="check" title={ko ? '가져올 항목이 없습니다' : 'Nothing to import'} />
       : <EmptyState icon="blocks" title={ko ? '공용 보관함이 비어 있습니다' : 'Your shared library is empty'}><Button icon="download" size="sm" variant="outline" onPress={() => changeView('import')}>{ko ? '가져올 항목 보기' : 'Browse imports'}</Button></EmptyState>}
     {filtered.length > 30 ? <Row justify="between" gap="sm" align="center"><Button size="sm" variant="ghost" disabled={currentPage === 0} onPress={() => set(page, currentPage - 1)}>{t.previous}</Button><Text muted size="xs">{`${currentPage + 1} / ${Math.ceil(filtered.length / 30)}`}</Text><Button size="sm" variant="ghost" disabled={(currentPage + 1) * 30 >= filtered.length} onPress={() => set(page, currentPage + 1)}>{t.more}</Button></Row> : null}
+    </Stack>}
   </Stack>
 }
 export function ArchitecturePanel() {

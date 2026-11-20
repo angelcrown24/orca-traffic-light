@@ -68,6 +68,18 @@ The **How it works** tab shows the path from provider installations through the 
 
 All screenshots show example workspaces with sample data.
 
+## Review installed skills
+
+Open **Library → Skill review** in a local workspace. Expand a skill to see the evidence, such as a missing reference at a particular line, a file present in only one provider’s copy, or a documented successor installed alongside an older version. Matching copies share one summary. **Set aside this version** hides a finding in this workspace until its evidence changes. You can restore it at any time.
+
+<a href="docs/images/skill-review-en.png"><img src="docs/images/skill-review-en.png" width="390" alt="Skill review in a narrow sidebar showing which local packages need attention and the evidence for a finding"></a>
+
+- **Check again** compares local packages and reuses unchanged results while the plugin worker is running. The check uses zero model tokens.
+- **Preview recommendations** tries an example task against the workspace selection. A draft description lets you compare recommendations before editing a skill.
+- **Review skill content** lets you select one or two installed skills for an optional local Ollama review. **Copy agent request** prepares a read-only review request with their file locations for a conversation of your choice.
+
+The review workflow draws on ECC’s changed-skill checks and evidence-based recommendations. [ECC skill-stocktake](https://github.com/affaan-m/ECC/tree/main/skills/skill-stocktake)
+
 ## Compatibility and privacy
 
 - **Provider support.** The library reads local skill and MCP configurations for Codex, Claude Code, Gemini CLI, and Antigravity. Shared skills still need their declared tools and software. Provider-native features such as hooks and proprietary connectors may require their original provider.

@@ -156,11 +156,14 @@ async function checkPortablePackage(root) {
   if (!portability.available) throw failure(portability.reason)
 }
 
-async function syncSkill(record, registry, home, preserveProviderCopies) {
+async function syncSkill(record, registry, home, preserveProviderCopies, reviewedSourceStamp) {
   const slug = record.syncKey ?? slugFor(record), previous = Object.hasOwn(registry.skills, slug) ? registry.skills[slug] : undefined
   if (previous && !record.syncKey) throw failure('A different source is already registered under this name. Compare it with the shared copy.')
   const sourcePath = previous?.sourcePath ?? dirname(record.path)
   const source = await inspectSkillPackage(sourcePath, true)
+  if (reviewedSourceStamp !== undefined && (!previous || source.stamp !== reviewedSourceStamp)) {
+    throw failure('The skill source changed after review. Check its changes again before updating.')
+  }
   const canonical = join(home, '.agents', 'skills', slug)
   const current = await missing(canonical)
   let existingCommon = false
@@ -235,8 +238,10 @@ async function syncSkill(record, registry, home, preserveProviderCopies) {
   } finally { await unlink(temporary).catch(() => {}) }
 }
 
-export async function syncCapabilities({ ids, home = homedir(), preserveProviderCopies = false } = {}) {
+export async function syncCapabilities({ ids, home = homedir(), preserveProviderCopies = false, reviewedSourceStamp } = {}) {
   if (!Array.isArray(ids) || !ids.length || ids.length > 24 || ids.some(id => typeof id !== 'string')) throw new Error('Choose between 1 and 24 capabilities to synchronize.')
+  if (reviewedSourceStamp !== undefined && (ids.length !== 1 || !ids[0].startsWith('skill:') ||
+      typeof reviewedSourceStamp !== 'string' || !/^[0-9a-f]{64}$/.test(reviewedSourceStamp))) throw new Error('Invalid reviewed skill revision.')
   home = await realpath(home)
   const directory = join(home, '.agents', 'traffic-light')
   await privateDirectory(directory)
@@ -250,7 +255,7 @@ export async function syncCapabilities({ ids, home = homedir(), preserveProvider
       if (!item || !record) { results.push({ id, name: 'Unavailable capability', status: 'failed', message: 'The item changed. Refresh the library.' }); continue }
       try {
         if (!item.available || !item.sharing.canSync) throw failure(item.reason || item.sharing.detail || 'This capability cannot be synchronized.')
-        if (record.kind === 'skill') results.push({ id, name: item.name, ...await syncSkill(record, registry, home, preserveProviderCopies === true) })
+        if (record.kind === 'skill') results.push({ id, name: item.name, ...await syncSkill(record, registry, home, preserveProviderCopies === true, reviewedSourceStamp) })
         else {
           if (preserveProviderCopies === true && !Object.hasOwn(registry.mcp, id)) {
             const taken = Object.values(registry.mcp).some(pin =>

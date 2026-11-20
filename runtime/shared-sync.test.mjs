@@ -206,3 +206,25 @@ test('stale imports of competing MCP sources keep only the first chosen shared v
   assert.equal((await add(sources[1].id)).results[0].status, 'conflict')
   assert.deepEqual(Object.keys((await readSharedRegistry(f.home)).mcp), [sources[0].id])
 })
+
+test('updating from Skill review publishes only the source revision that was inspected', async t => {
+  const { createSkillReviewer } = await import('./skill-review.mjs')
+  const f = await fixture(t)
+  const relative = '.claude/skills/sample'
+  await f.put(relative + '/SKILL.md', skill('sample'))
+  const id = (await f.scan()).items[0].id
+  const shared = (await f.sync([id])).results[0].newId
+  const original = await realpath(join(f.home, '.agents/skills/sample'))
+  await f.put(relative + '/scripts/helper.sh', 'first revision')
+  const inspect = createSkillReviewer({ home: f.home })
+  const first = (await inspect(await f.scan())).findings.find(finding => finding.kind === 'update')
+  assert.match(first.reviewedSourceStamp, /^[0-9a-f]{64}$/)
+  await f.put(relative + '/scripts/helper.sh', 'second revision')
+  const synchronize = reviewedSourceStamp => syncCapabilities({ ids: [shared], home: f.home, reviewedSourceStamp })
+  assert.equal((await synchronize(first.reviewedSourceStamp)).results[0].status, 'conflict')
+  assert.equal(await realpath(join(f.home, '.agents/skills/sample')), original)
+  const latest = (await inspect(await f.scan())).findings.find(finding => finding.kind === 'update')
+  assert.notEqual(first.reviewedSourceStamp, latest.reviewedSourceStamp)
+  assert.equal((await synchronize(latest.reviewedSourceStamp)).results[0].status, 'synced')
+  assert.equal(await readFile(join(f.home, '.agents/skills/sample/scripts/helper.sh'), 'utf8'), 'second revision')
+})

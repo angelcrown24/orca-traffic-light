@@ -24,3 +24,34 @@ export type ToolboxState = { workspaceId: string | null; selected: string[]; bun
 
 export type JevRecommendation = { id: string; name: string; kind: 'skill' | 'mcp'; at: number }
 export type ToolboxActivity = { workspaceId: string | null; recommendations: JevRecommendation[]; events: ToolboxEvent[] }
+
+export type SkillReviewFinding = {
+  key: string
+  name: string
+  kind: 'update' | 'variants' | 'missing' | 'provider' | 'conflict' | 'excluded' | 'successor'
+  providers: string[]
+  ids: string[]
+  stamp: string
+  evidence: string[]
+  line?: number
+  lines?: number[]
+  evidenceCount?: number
+  evidenceDetails?: { path: string; state: 'added' | 'removed' | 'changed' | 'only'; ids?: string[] }[]
+  successorId?: string
+  reviewedSourceStamp?: string
+  requirement?: { file: string; field: string; line?: number }
+  workspaceCount?: number
+}
+export type SkillReviewReport = {
+  scanned: number
+  checked: number
+  skipped: number
+  partial: boolean
+  identicalGroups: number
+  findings: SkillReviewFinding[]
+}
+export type RecommendationPreviewInput = { workspaceId: string; query: string; edit?: { id: string; description: string } }
+export type PreviewRanking = { method: 'kev' | 'keywords'; names: string[] }
+export type RecommendationPreview = { before: PreviewRanking; after?: PreviewRanking }
+export type SkillAnalysisInput = { workspaceId: string; ids: string[]; language: 'en' | 'ko' }
+export type SkillAnalysis = { status: 'ready'; model: string; text: string; truncated: boolean } | { status: 'unavailable' }

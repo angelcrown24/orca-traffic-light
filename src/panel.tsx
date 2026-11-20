@@ -6,7 +6,7 @@ import type { ToolboxActivity } from './toolbox-types'
 import type { NativeToolCall } from './native-reader'
 import { SessionWork, resetSessionWork, refreshSessionWork } from './session-work'
 import type { ResourceObservation } from './resource-classifier'
-import { ArchitecturePanel, ToolboxPanel, openToolbox, setupToolbox } from './toolbox-panel'
+import { ArchitecturePanel, ToolboxPanel, leaveLibrary, openToolbox, setupToolbox } from './toolbox-panel'
 
 const tab = atom('traffic-light.tab', 'activity', { persist: 'workspace' })
 const calls = atom<Call[]>([])
@@ -120,7 +120,7 @@ async function changeActivitySetting(key: 'nativeActivity' | 'antigravityChildSt
 }
 export function setup(ctx: PanelContext): void {
   isPanelVisible = () => read(ctx.visible) && read(tab) === 'activity'
-  setupToolbox(ctx, () => read(tab) === 'library' || read(tab) === 'structure')
+  setupToolbox(ctx, () => read(tab))
   ctx.subscriptions.push({ dispose: () => { requestId++; sharedRequestId++; settingsReadId++; nativeRequestId++; resetSessionWork(); isPanelVisible = () => false } })
   ctx.subscriptions.push(plugin.on('toolbox.changed', () => { void refreshShared() }))
   ctx.subscriptions.push(plugin.on('calls.changed', () => { void refresh() }))
@@ -266,7 +266,10 @@ export default function Panel() {
   return <Box direction="column" gap="md" padding="md">
     <Heading>Traffic Light</Heading>
     <Tabs label={ko ? 'Traffic Light 보기' : 'Traffic Light views'} value={read(tab)} onChange={async value => {
-      if (value !== read(tab)) resetSessionWork(false)
+      if (value !== read(tab)) {
+        if (read(tab) === 'library') leaveLibrary()
+        resetSessionWork(false)
+      }
       set(tab, value)
       if (value === 'library' || value === 'structure') await openToolbox()
       if (value === 'activity') await Promise.all([refresh(), refreshNative(), refreshShared(), refreshSessionWork(canReadSession)])

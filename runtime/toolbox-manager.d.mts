@@ -1,4 +1,4 @@
-import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity } from '../src/toolbox-types'
+import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis } from '../src/toolbox-types'
 export function createToolboxManager(options: {
   getContext: () => Promise<{ workspaceId?: string } | null>
   getWorkspaces: () => Promise<{ workspaces: { id: string; path: string; hostId: string | null }[] }>
@@ -18,7 +18,11 @@ export function createToolboxManager(options: {
   copyAdaptation(input: { workspaceId: string; id: string; language: 'en' | 'ko' }): Promise<{ copied: boolean; prompt: string }>
   initialize(): Promise<void>
   setAutomation(input: { workspaceId: string; enabled: boolean }): Promise<ToolboxState>
+  skillReview(input: { workspaceId: string }): Promise<SkillReviewReport>
+  previewSkills(input: RecommendationPreviewInput): Promise<RecommendationPreview>
+  reviewSkills(input: SkillAnalysisInput): Promise<SkillAnalysis>
+  copySkillReview(input: SkillAnalysisInput): Promise<{ copied: boolean; prompt: string }>
   compare(input: { id: string }): Promise<ToolboxComparison>
-  sync(input: { workspaceId: string; ids: string[]; preserveProviderCopies?: boolean }): Promise<{ results: SyncResult[]; catalog: ToolboxCatalog }>
+  sync(input: { workspaceId: string; ids: string[]; preserveProviderCopies?: boolean; reviewedSourceStamp?: string }): Promise<{ results: SyncResult[]; catalog: ToolboxCatalog }>
   dispose(): Promise<void>
 }

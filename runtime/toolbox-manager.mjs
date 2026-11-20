@@ -1,3 +1,4 @@
+import { createReviewRequests } from './review-manager.mjs'
 import { compareSources } from './source-comparison.mjs'
 import { scanCatalog, resolveRecord } from './catalog.mjs'
 import { createToolboxService } from './service.mjs'
@@ -208,13 +209,14 @@ export function createToolboxManager({ getContext, getWorkspaces, post, loadSele
   async function compare({ id }) {
     return compareSources(await scanNow(), id)
   }
-  async function sync({ workspaceId, ids, preserveProviderCopies }) {
+  async function sync({ workspaceId, ids, preserveProviderCopies, reviewedSourceStamp }) {
     return locked('$sync', () => locked(workspaceId, async () => {
       await context(workspaceId)
       if (!Array.isArray(ids) || !ids.length || ids.length > MAX_SELECTION || ids.some(id => typeof id !== 'string')) error('Choose up to 24 capabilities to share.')
       const current = await local(workspaceId)
       await context(workspaceId)
-      const { results } = await synchronizer({ ids: [...new Set(ids)], ...(preserveProviderCopies === true ? { preserveProviderCopies: true } : {}) })
+      const { results } = await synchronizer({ ids: [...new Set(ids)], ...(preserveProviderCopies === true ? { preserveProviderCopies: true } : {}),
+        ...(reviewedSourceStamp !== undefined ? { reviewedSourceStamp } : {}) })
       assertActive()
       const replacements = new Map(results.filter(result => result.newId && ['synced', 'unchanged'].includes(result.status)).map(result => [result.id, result.newId]))
       const selected = [...new Set(current.selected.map(id => replacements.get(id) ?? id))]
@@ -348,5 +350,7 @@ export function createToolboxManager({ getContext, getWorkspaces, post, loadSele
     try { copied = await clipboard(prompt) === true } catch { /* The panel can still show the prompt for manual copying. */ }
     return { copied, prompt }
   }
-  return { catalog, activity, state, select, prepare, revoke, copy, copyAdaptation, initialize, setAutomation, sync, compare, dispose }
+  const reviews = createReviewRequests({ context, workspaceFor, getWorkspaces, loadSelection,
+    selectedFor: async id => (await local(id)).selected, scanNow, clipboard })
+  return { ...reviews, catalog, activity, state, select, prepare, revoke, copy, copyAdaptation, initialize, setAutomation, sync, compare, dispose }
 }

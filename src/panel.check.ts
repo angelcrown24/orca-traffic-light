@@ -76,6 +76,19 @@ export default defineCheck({
     ]
   }) } },
   library: { requests, persisted: { workspace: { 'traffic-light.tab': 'library' } } },
+  skillReview: { requests: { ...requests, 'toolbox.skillReview': () => ({
+    scanned: 28, checked: 28, skipped: 0, partial: false, identicalGroups: 2,
+    findings: [
+      { key: 'report-file', name: 'report-export', kind: 'missing', providers: ['Shared', 'Codex'], ids: ['report'], stamp: 'report-v1', evidence: ['scripts/export.sh'], line: 18 },
+      { key: 'release-update', name: 'release-check', kind: 'update', providers: ['Claude Code'], ids: ['release'], stamp: 'release-v2', workspaceCount: 2, evidence: ['SKILL.md', 'scripts/verify.sh'] },
+      { key: 'handoff-next', name: 'handoff-notes', kind: 'successor', providers: ['Codex', 'Gemini CLI'], ids: ['handoff', 'handoff-v2'], successorId: 'handoff-v2', stamp: 'handoff-next', evidence: ['handoff-notes-v2'], line: 12 }
+    ]
+  }), 'toolbox.catalog': () => ({ ...catalog, items: [...catalog.items,
+    { ...catalog.items[0], id: 'report', name: 'report-export' },
+    { ...catalog.items[0], id: 'release', name: 'release-check', providers: ['Shared', 'Claude Code'], sharing: { state: 'update', canSync: true } },
+    { ...catalog.items[0], id: 'handoff', name: 'handoff-notes' },
+    { ...catalog.items[0], id: 'handoff-v2', name: 'handoff-notes-v2' }
+  ] }) }, persisted: { workspace: { 'traffic-light.tab': 'library', 'traffic-light.library-view': 'review' } } },
   import: { requests: { ...requests, 'toolbox.catalog': () => ({ ...catalog, items: [
     ...catalog.items, { ...catalog.items[1], id: 'figma-other', providers: ['Gemini CLI'], source: 'Provider settings', sharing: { state: 'provider', canSync: true } },
     { ...catalog.items[1], id: 'blender', name: 'blender', providers: ['Claude Code'], source: 'Provider settings', sharing: { state: 'provider', canSync: true } },
