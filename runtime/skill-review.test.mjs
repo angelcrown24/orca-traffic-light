@@ -20,7 +20,7 @@ async function setup(t) {
     } }
 }
 
-test('canonical aliases and equal provider copies are quiet; supporting files and modes invalidate only changed reviews', async t => {
+test('canonical aliases stay together and only an independent identical copy can be cleaned up; files and modes invalidate changed reviews', async t => {
   const f = await setup(t)
   for (const source of ['.agents', '.claude']) {
     await f.put(source + '/skills/build/SKILL.md', skill('build'))
@@ -29,7 +29,15 @@ test('canonical aliases and equal provider copies are quiet; supporting files an
   await mkdir(join(f.home, '.codex/skills'), { recursive: true })
   await symlink(join(f.home, '.agents/skills/build'), join(f.home, '.codex/skills/build'))
   const first = await f.review()
-  assert.deepEqual([first.scanned,first.checked,first.skipped,first.identicalGroups,first.findings], [2,2,0,1,[]])
+  assert.deepEqual([first.scanned, first.checked, first.skipped, first.identicalGroups], [2, 2, 0, 1])
+  const catalog = await f.scan(), duplicate = first.findings[0]
+  const retained = catalog.items.find(item => item.providers.includes('Shared'))
+  const target = catalog.items.find(item => item.providers.includes('Claude Code'))
+  assert.equal(first.findings.length, 1)
+  assert.equal(duplicate.kind, 'redundant')
+  assert.deepEqual(duplicate.providers, ['Claude Code'])
+  assert.deepEqual(duplicate.removalCandidate, { id: target.id, reason: 'duplicate', retainedId: retained.id })
+  assert.deepEqual(duplicate.comparisonIds, [target.id, retained.id])
   assert.equal((await f.review()).checked, 0)
   await chmod(join(f.home, '.claude/skills/build/scripts/task.sh'), 0o700)
   const changed = await f.review(), row = changed.findings[0]
@@ -132,9 +140,69 @@ test('reports an author-endorsed installed successor, not age, similar names, a 
   const successor = (await f.review()).findings.find(row => row.kind==='successor')
   assert.deepEqual([successor.name,successor.line,successor.evidence,successor.ids,successor.successorId],
     ['learn',5,['learn-v2'],[older.id,newer.id],newer.id])
+  assert.equal(successor.removalCandidate, undefined)
   assert.equal((await f.review()).findings.length, 1)
   await f.put('.codex/skills/learn-v2/SKILL.md', skill('learn-v2','Updated instructions'))
   assert.notEqual((await f.review()).findings[0].stamp, successor.stamp)
   await f.put('.agents/skills/learn/SKILL.md', skill('learn', 'You may also use `learn-v2`.\nDo not assume `learn-v2` is the preferred path for new installs.'))
   assert.deepEqual((await f.review()).findings, [])
+})
+
+
+test('a removal candidate needs explicit replacement, a usable survivor and matching provider reach', async t => {
+  const f = await setup(t)
+  const old = '.codex/skills/lint/SKILL.md', next = '.codex/skills/lint-v2/SKILL.md'
+  const retired = skill('lint', 'This skill is superseded by `lint-v2`.')
+  await f.put(old, retired)
+  await f.put('.claude/skills/lint-v2/SKILL.md', skill('lint-v2'))
+  const initial = await f.review()
+  assert.equal(initial.findings.find(row => row.kind === 'successor').removalCandidate, undefined)
+  await f.put(next, skill('lint-v2'))
+  const data = await f.scan()
+  const original = data.items.find(item => item.name === 'lint')
+  const keep = data.items.find(item => item.name === 'lint-v2' && item.providers.includes('Codex'))
+  const row = (await f.review()).findings.find(f => f.kind === 'successor')
+  assert.deepEqual(row.removalCandidate, { id: original.id, reason: 'successor', retainedId: keep.id })
+  assert.equal(row.line, 5)
+  await f.put(next, skill('lint-v2', '', 'disable-model-invocation: true\n'))
+  assert.equal((await f.review()).findings.find(f => f.kind === 'successor').removalCandidate, undefined)
+})
+
+test('root permissions, restricted copies, same-canonical aliases and truncated inventories do not qualify for deduplication', async t => {
+  const f = await setup(t)
+  const common = await f.put('.agents/skills/tool/SKILL.md', skill('tool'))
+  await mkdir(join(f.home, '.claude/skills'), { recursive: true })
+  await symlink(dirname(common), join(f.home, '.claude/skills/tool'))
+  assert.equal((await f.review()).findings.length, 0)
+  const other = await f.put('.codex/skills/tool/SKILL.md', skill('tool'))
+  await chmod(dirname(common), 0o700)
+  await chmod(dirname(other), 0o755)
+  assert.equal((await f.review()).findings.some(f => f.removalCandidate), false)
+  await chmod(dirname(other), 0o700)
+  const data = await f.scan(), reader = createSkillReviewer({ home: f.home })
+  data.warnings.push('Skill inventory reached its scan limit; some entries are omitted.')
+  assert.equal((await reader(data)).findings.some(f => f.removalCandidate), false)
+  await f.put('.agents/skills/tool/SKILL.md', skill('tool', '', 'disable-model-invocation: true\n'))
+  await f.put('.codex/skills/tool/SKILL.md', skill('tool', '', 'disable-model-invocation: true\n'))
+  assert.equal((await f.review()).findings.some(f => f.removalCandidate), false)
+})
+
+test('suggests a moved reference only when exactly one same-basename regular package file exists', async t => {
+  const f = await setup(t), root = '.agents/skills/moved/'
+  await f.put(root + 'SKILL.md', skill('moved', [
+    'Read [guide](references/guide.md).',
+    'Read [notes](references/notes.md).',
+    'Read [design](references/design.md).',
+    'Read [empty](references/empty.md).',
+    'Read [private](references/private.md).'
+  ].join('\n')))
+  for (const file of ['docs/guide.md', 'docs/notes.md', 'archive/notes.md', 'docs/private.md', 'odd folder/private.md']) {
+    await f.put(root + file, 'fixture')
+  }
+  await symlink('guide.md', join(f.home, root, 'docs/design.md'))
+  const row = (await f.review()).findings.find(finding => finding.kind === 'missing')
+  assert.deepEqual(row.referenceFixes, [{ from: 'references/guide.md', to: 'docs/guide.md', line: 5 }])
+  assert.doesNotMatch(JSON.stringify(row), /odd folder/)
+  await f.put(root + 'manual/guide.md', 'second candidate')
+  assert.equal((await f.review()).findings.find(finding => finding.kind === 'missing').referenceFixes, undefined)
 })

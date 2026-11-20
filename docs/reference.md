@@ -46,6 +46,16 @@ The reference check examines explicit package paths in skill instructions and sk
 
 The worker caches package inspection results in memory and checks metadata on the next pass. Restarting the worker starts a new baseline. The panel stores deferred finding identifiers and revisions per workspace. Confirmed evidence changes make a deferred finding visible again. Discovery limits and unreadable packages appear in the coverage summary.
 
+### Editing and removal
+
+The editor opens the chosen installation’s `SKILL.md`. A missing-reference suggestion requires one matching regular file with the same filename elsewhere inside that package. Applying the suggestion updates the draft. Saving writes the instructions and reruns Review. For a registered shared snapshot, the editor opens its verified original when available. Apply the resulting shared update in Library to publish it to the snapshot.
+
+Removal candidates include independently installed copies with matching package contents and permissions, and old installations whose own instructions explicitly identify an installed replacement that covers their providers. Several provider links to the same physical skill already count as one installation. A recommendation for new installs alone, a file’s age, and the limited Activity history do not qualify an installation for removal.
+
+The confirmation identifies the locations and providers affected, the retained copy for duplicate cleanup, and the number of workspaces selecting the source when that count is available. Ordinary deletion moves the package and its known direct links into a local recovery folder. Duplicate cleanup replaces the archived directory with a link to the retained installation. Provider discovery follows that link. Previously pinned workspace grants still refer to the installation they approved. Select the retained skill and apply access in Library when needed.
+
+Edit backups and deletion records live under `~/.agents/traffic-light/review-changes/`. Open **Recent changes** in the workspace that made the change to undo it. A conflicting file or new installation at the restoration path must be resolved before restoration. System-managed directories, immutable snapshots and packages whose locations or contents cannot be verified have restricted actions.
+
 A recommendation preview uses the eligible items in the workspace selection. It labels the local Kev or keyword method for each ranking. Editing a description in the preview changes only the simulated ranking. Optional AI analysis sends up to 6,000 characters per selected instruction file to `127.0.0.1:11434`. A verified local completion model produces a text review. With a local Kev decision model, the worker presents the selected line ranges for usage conditions and verification steps, and indicates when the model could not identify a clear passage. The ordinary file inspection works independently of both model types. The separate clipboard action includes file locations for the selected skills. The reader chooses the conversation and provider that receive the request.
 
 ## Agent connection

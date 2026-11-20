@@ -1,37 +1,34 @@
+import { createSkillChangeRequests, localSelections } from './review-actions.mjs'
 import { createSkillInspection } from './skill-inspection.mjs'
 import { createSkillReviewer } from './skill-review.mjs'
 import { buildSkillReviewRequest, previewRecommendations, reviewSkills as analyzeSkills } from './review-assistant.mjs'
 
-// Review is read-only and never creates a bundle or claims an activity event.
-export function createReviewRequests({ context, workspaceFor, getWorkspaces, loadSelection, selectedFor, scanNow, clipboard }) {
-  const inspect = createSkillReviewer()
-  const inspectSelected = createSkillInspection(createSkillReviewer())
+// Inventory, inspection and explicit maintenance share the same local-workspace boundary.
+export function createReviewRequests({ context, workspaceFor, getWorkspaces, loadSelection, selectedFor, scanNow, clipboard, maintenance, home, lock, changed }) {
+  const inspect = createSkillReviewer({ home })
+  const inspectSelected = createSkillInspection(createSkillReviewer({ home }))
 
-  async function catalogFor(workspaceId) {
+  async function ensureLocal(workspaceId) {
     if (typeof workspaceId !== 'string' || !workspaceId || workspaceId.length > 2048) throw new Error('Choose a local workspace.')
     await context(workspaceId)
     await workspaceFor(workspaceId)
-    const data = await scanNow()
+    await context(workspaceId)
+  }
+
+  async function catalogFor(workspaceId, fresh = false) {
+    await ensureLocal(workspaceId)
+    const data = await scanNow(fresh)
     await context(workspaceId)
     return data
   }
 
   async function withImpact(report) {
     if (!report.findings.length) return report
-    // Only a complete local workspace list can support an exact count.
-    try {
-      const { workspaces, truncated } = await getWorkspaces()
-      if (truncated || !Array.isArray(workspaces) || workspaces.length > 256) return report
-      const identifiers = [...new Set(workspaces.filter(w => !w.hostId || w.hostId === 'local').map(w => w.id))]
-      const selections = []
-      for (let i = 0; i < identifiers.length; i += 12) {
-        const batch = await Promise.all(identifiers.slice(i, i + 12).map(id => loadSelection(id)))
-        selections.push(...batch.map(ids => new Set(Array.isArray(ids) ? ids : [])))
-      }
-      const findings = report.findings.map(finding => ({ ...finding,
-        workspaceCount: selections.filter(selection => finding.ids.some(id => selection.has(id))).length }))
-      return { ...report, findings }
-    } catch { return report }
+    const selections = await localSelections(getWorkspaces, loadSelection)
+    if (!selections) return report
+    const findings = report.findings.map(finding => ({ ...finding,
+      workspaceCount: [...selections.values()].filter(ids => finding.ids.some(id => ids.has(id))).length }))
+    return { ...report, findings }
   }
 
   async function skillReview({ workspaceId }) {
@@ -81,5 +78,7 @@ export function createReviewRequests({ context, workspaceFor, getWorkspaces, loa
     try { copied = await clipboard(prompt) === true } catch { /* The panel also supports manual copying. */ }
     return { copied, prompt }
   }
-  return { skillReview, inspectSkills, previewSkills, reviewSkills, copySkillReview }
+  const actions = createSkillChangeRequests({ catalogFor, ensureLocal, maintenance, lock, changed,
+    selectionsFor: () => localSelections(getWorkspaces, loadSelection) })
+  return { ...actions, skillReview, inspectSkills, previewSkills, reviewSkills, copySkillReview }
 }

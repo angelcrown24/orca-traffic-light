@@ -1,8 +1,9 @@
-import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis, SkillInspection } from '../src/toolbox-types'
+import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis, SkillInspection, SkillChangeInput, SkillChangeApplyInput, SkillChangePreview, SkillChangeReceipt } from '../src/toolbox-types'
 export function createToolboxManager(options: {
   getContext: () => Promise<{ workspaceId?: string } | null>
   getWorkspaces: () => Promise<{ workspaces: { id: string; path: string; hostId: string | null }[] }>
   post: () => unknown
+  postSkillsChanged?: () => unknown
   loadSelection?: (id: string) => Promise<unknown>
   saveSelection?: (id: string, ids: string[]) => Promise<unknown>
   loadAutomation?: () => Promise<unknown>
@@ -19,6 +20,10 @@ export function createToolboxManager(options: {
   initialize(): Promise<void>
   setAutomation(input: { workspaceId: string; enabled: boolean }): Promise<ToolboxState>
   skillReview(input: { workspaceId: string }): Promise<SkillReviewReport>
+  previewSkillChange(input: SkillChangeInput): Promise<SkillChangePreview>
+  applySkillChange(input: SkillChangeApplyInput): Promise<SkillChangeReceipt>
+  skillChangeHistory(input: { workspaceId: string }): Promise<SkillChangeReceipt[]>
+  undoSkillChange(input: { workspaceId: string; receiptId: string }): Promise<{ restored: boolean }>
   previewSkills(input: RecommendationPreviewInput): Promise<RecommendationPreview>
   inspectSkills(input: SkillAnalysisInput): Promise<SkillInspection>
   reviewSkills(input: SkillAnalysisInput): Promise<SkillAnalysis>

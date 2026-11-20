@@ -89,7 +89,7 @@ function describe(sources, findings, language, related) {
   const add = (label, detail, source) => { if (detail && evidence.length < 16) evidence.push({ label, detail, ...(source ? { source } : {}) }) }
   let summary = '', nextStep = ''
   function conclusion(text, action) { if (!summary) { summary = text; nextStep = action } }
-  const order = ['excluded', 'missing', 'conflict', 'successor', 'provider', 'variants', 'update']
+  const order = ['excluded', 'missing', 'conflict', 'successor', 'provider', 'variants', 'update', 'redundant']
   for (const kind of order) for (const f of findings.filter(row => row.kind === kind)) {
     const source = sources.find(s => f.ids.includes(s.item.id) && s.name === f.name) ?? sources.find(s => f.ids.includes(s.item.id))
     const name = display(source), [firstEvidence] = f.evidence
@@ -123,6 +123,13 @@ function describe(sources, findings, language, related) {
         quote ? say('Review the author’s guidance before choosing which version to use.', '아래 원문의 권장 조건을 보고 사용할 버전을 선택하세요.')
           : say('Check the author’s version guidance in ' + reference + ' before choosing a version.', reference + '에서 원문의 권장 조건을 확인하고 사용할 버전을 선택하세요.'))
       add(quote ? say('Author guidance', '원문 안내') : say('Documented successor', '원문에 명시된 후속 스킬'), quote || target, reference)
+    } else if (kind === 'redundant') {
+      const keep = related.find(item => item.id === f.removalCandidate?.retainedId)
+      if (!keep) continue
+      conclusion(say('The two copies have identical package files and permissions.', '두 사본의 패키지 파일과 권한이 같습니다.'),
+        say('Remove the duplicate and link its location to the kept copy to preserve provider access.', '중복 사본을 삭제하고 그 위치를 남길 사본에 연결하면 기존 제공자에서도 계속 쓸 수 있습니다.'))
+      add(say('Copy to remove', '삭제할 사본'), f.providers.join(' · '), f.name)
+      add(say('Copy to keep', '남길 사본'), keep.providers.filter(p => providerNames.has(p)).join(' · '), safeName(keep.name))
     } else if (kind === 'provider') {
       const detail = ({
         'explicit-invocation': say('Requires explicit invocation by the user.', '사용자가 직접 호출하도록 설정되어 있습니다.'),
@@ -157,7 +164,7 @@ function describe(sources, findings, language, related) {
         say('Compare the declared purposes and section titles for the task you want to run.', '아래 용도 설명과 문서 구성을 비교해 현재 작업에 맞는 스킬을 선택하세요.'))
     }
   }
-  const showContext = Boolean(second) || !evidence.length
+  const showContext = !evidence.length || (second && first.content?.fingerprint !== second.content?.fingerprint)
   for (const source of sources) if (source.content) {
     if (!source.content.hasBody) {
       conclusion(say(display(source) + ' has no instruction steps.', display(source) + '에 실행 지침 본문이 없습니다.'),

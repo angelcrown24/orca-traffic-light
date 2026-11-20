@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
-import { dirname, isAbsolute, join, relative, sep } from 'node:path'
+import { homedir } from 'node:os'
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
+import { containsInstallation, isUserSkillDirectory } from './maintenance-paths.mjs'
 import { inspectSkillPackage, readSharedRegistry } from './shared-sync.mjs'
 
 const digest = value => createHash('sha256').update(value).digest('hex')
@@ -47,7 +49,12 @@ function readInstructions(content) {
     const preferred = /(?:^\s*(?:[-*] )?|\bbut\s+|[.;!]\s+)`([A-Za-z][A-Za-z0-9_.-]{0,95}-v\d{1,3})` is (?:the )?(?:preferred|recommended) (?:path|option|choice|version|skill) for new (?:installs|installations|projects)\b/i.exec(line)
     const replacement = /^(?:[-*] )?(?:(?:This (?:skill|version) (?:is|was|has been) )?(?:superseded|replaced) by|(?:This skill is )?deprecated[.,:; —-]+use) `([A-Za-z][A-Za-z0-9_.-]{0,95}-v\d{1,3})`(?: instead)?[.!\s]*$/i.exec(line.trim())
     const target = preferred?.[1] ?? replacement?.[1]
-    if (target && !successors.some(row => row.name === target)) successors.push({name:target.toLowerCase(), line:index + 1})
+    if (target) {
+      const name = target.toLowerCase()
+      const existing = successors.find(row => row.name === name)
+      if (!existing) successors.push({ name, line: index + 1, replaced: Boolean(replacement) })
+      else if (replacement && !existing.replaced) Object.assign(existing, { line: index + 1, replaced: true })
+    }
   }
   return { references, successors }
 }
@@ -69,7 +76,26 @@ async function missingReferences(root, entries, references) {
     }
     missing.push({ path, line })
   }
+  if (missing.length) {
+    const singlePath = new Map()
+    for (const [path, kind] of byPath) {
+      if (kind !== 'file') continue
+      const name = basename(path)
+      singlePath.set(name, singlePath.has(name) ? null : path)
+    }
+    for (const hit of missing) {
+      const to = singlePath.get(basename(hit.path))
+      if (to && safeRelative(to)) hit.replacement = to
+    }
+  }
   return missing
+}
+
+export async function currentReferenceFixes(root, entries, body) {
+  const missing = await missingReferences(root, entries, readInstructions(body).references)
+  return missing.filter(hit => hit.replacement).slice(0, evidenceLimit).map(({path, replacement, line}) => ({
+    from: path, to: replacement, line
+  }))
 }
 
 function differenceDetails(packages, sourceIds) {
@@ -125,7 +151,7 @@ function finding(kind, items, files, version, extra = {}) {
 }
 
 // The catalog supplies canonical package roots. Cache only bounded metadata and findings, never file contents.
-export function createSkillReviewer({ home } = {}) {
+export function createSkillReviewer({ home = homedir() } = {}) {
   let cache = new Map()
   return async function review(catalog) {
     const nextCache = new Map(), findings = [], excluded = new Map(), incompleteNames = new Set()
@@ -170,7 +196,8 @@ export function createSkillReviewer({ home } = {}) {
       return { data, fresh: true }
     }
 
-    const registered = items.some(item => item.sharing?.state === 'update') ? await readSharedRegistry(home).catch(() => null) : null
+    const registered = await readSharedRegistry(home).catch(() => null)
+    const registrations = Object.entries(registered?.skills ?? {})
     const catalogPaths = new Map([...catalog.records.values()].filter(record => record.kind === 'skill').map(record => [record.path, record.fingerprint]))
     const exclusions = catalog.skillExclusions ?? []
     for (const item of exclusions) exclude(item, item.reason, item.stamp)
@@ -216,6 +243,19 @@ export function createSkillReviewer({ home } = {}) {
       groups.get(name).push({ item, pkg })
     }
 
+    const inventoryUnverified = !registered || (catalog.warnings ?? []).some(warning => /skill inventory|shared registry/i.test(warning))
+    function userPackage(item) {
+      const record = catalog.records.get(item.id)
+      if (!record?.path || !item.available || item.providerOnly || record.syncKey || record.packageRoot ||
+          !['shared', 'provider'].includes(item.sharing?.state)) return false
+      const root = dirname(record.path), seen = catalog.skillInstallations?.get(record.path)
+      return !registrations.some(([, entry]) => root === entry.sourcePath || root === entry.snapshot) &&
+        !containsInstallation(catalog, record.path, registrations) && isUserSkillDirectory(home, root) && seen?.length && seen.every(entry => entry.packageRoot === root &&
+        isUserSkillDirectory(home, entry.path) && isUserSkillDirectory(home, entry.logicalPath))
+    }
+    const preferShared = (a, b) => Number(b.item.providers.includes('Shared')) - Number(a.item.providers.includes('Shared')) ||
+      a.item.id.localeCompare(b.item.id)
+
     for (const group of groups.values()) {
       const versions = new Map()
       for (const row of group) {
@@ -232,17 +272,48 @@ export function createSkillReviewer({ home } = {}) {
       } else if (group.length > 1 && !incompleteNames.has(group[0].item.name.trim().toLowerCase())) identicalGroups++
       for (const copies of versions.values()) {
         const { missing, fingerprint, successors } = copies[0].pkg
-        if (missing.length) findings.push(finding('missing', copies.map(row => row.item), missing.map(hit => hit.path), fingerprint, { lines: missing.map(hit => hit.line) }))
+        const canRecommend = !inventoryUnverified && !incompleteNames.has(copies[0].item.name.toLowerCase())
+        if (copies.length > 1 && canRecommend) {
+          // Aliases already share one catalog ID. Keep one independent directory for each root permission mode.
+          const keepers = new Map()
+          for (const { item } of copies.filter(copy => userPackage(copy.item)).sort(preferShared)) {
+            const root = dirname(catalog.records.get(item.id).path)
+            const info = await stat(root).catch(() => null)
+            if (!info?.isDirectory()) continue
+            const mode = info.mode & 0o7777
+            const keep = keepers.get(mode)
+            if (!keep) { keepers.set(mode, { item, root }); continue }
+            if (root === keep.root || root.startsWith(keep.root + sep) || keep.root.startsWith(root + sep)) continue
+            const row = finding('redundant', [item], ['SKILL.md'], [fingerprint, mode, keep.item.id, keep.item.providers], { reason: keep.item.id })
+            findings.push({ ...row, comparisonIds: [item.id, keep.item.id],
+              removalCandidate: { id: item.id, reason: 'duplicate', retainedId: keep.item.id } })
+          }
+        }
+        if (missing.length) {
+          const row = finding('missing', copies.map(row => row.item), missing.map(hit => hit.path), fingerprint, { lines: missing.map(hit => hit.line) })
+          const fixes = missing.filter(hit => hit.replacement && row.evidence.includes(hit.path))
+            .map(hit => ({ from: hit.path, to: hit.replacement, line: hit.line }))
+          findings.push(fixes.length ? { ...row, referenceFixes: fixes } : row)
+        }
         const source = copies[0].item.name.toLowerCase()
         const family = source.replace(/-v\d+$/, ''), currentVersion = Number(source.slice(family.length + 2)) || 1
-        for (const { name, line } of successors) {
+        for (const { name, line, replaced } of successors) {
           if (name.replace(/-v\d+$/, '') !== family || Number(name.slice(family.length + 2)) <= currentVersion) continue
           const targets = groups.get(name)
           if (!targets) continue
-          const ordered = [...targets].sort((a, b) => Number(b.item.providers.includes('Shared')) - Number(a.item.providers.includes('Shared')) || a.item.id.localeCompare(b.item.id))
-          const row = finding('successor', copies.map(copy => copy.item), [name],
-            [fingerprint, ordered.map(target => [target.item.id, target.pkg.fingerprint])], { reason: name, lines: [line] })
-          findings.push({ ...row, ids: [...row.ids, ...ordered.map(target => target.item.id)], successorId: ordered[0].item.id })
+          const ordered = [...targets].sort(preferShared)
+          const evidenceVersion = [fingerprint, ordered.map(target => [target.item.id, target.pkg.fingerprint])]
+          // A preference for new installs does not retire supported legacy workflows.
+          for (const sources of replaced ? copies.map(copy => [copy.item]) : [copies.map(copy => copy.item)]) {
+            const item = sources[0]
+            const keep = replaced && canRecommend && userPackage(item) && !incompleteNames.has(name) && ordered.find(target =>
+              target.item.available && !target.item.providerOnly && !['conflict', 'update'].includes(target.item.sharing?.state) &&
+              !target.pkg.successors.some(successor => successor.replaced) && item.providers.every(provider => target.item.providers.includes(provider)))
+            const retainedId = (keep || ordered[0]).item.id
+            const row = finding('successor', sources, [name], keep ? [...evidenceVersion, retainedId] : evidenceVersion, { reason: name, lines: [line] })
+            findings.push({ ...row, ids: [...row.ids, ...ordered.map(target => target.item.id)], successorId: retainedId,
+              ...(keep ? { removalCandidate: { id: item.id, reason: 'successor', retainedId } } : {}) })
+          }
         }
       }
     }

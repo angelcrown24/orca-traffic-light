@@ -1,3 +1,4 @@
+import { createSkillMaintenance } from './skill-maintenance.mjs'
 import { createReviewRequests } from './review-manager.mjs'
 import { compareSources } from './source-comparison.mjs'
 import { scanCatalog, resolveRecord } from './catalog.mjs'
@@ -9,7 +10,7 @@ import { createAutomation } from './automation.mjs'
 import { syncCapabilities } from './shared-sync.mjs'
 
 const MAX_SELECTION = 24
-export function createToolboxManager({ getContext, getWorkspaces, post, loadSelection = async () => [], saveSelection = async () => {}, loadAutomation = async () => [], saveAutomation = async () => {}, scan = scanCatalog, serviceFactory = createToolboxService, bundleWriter = writeBundle, clipboard = copyText, automationFactory = createAutomation, synchronizer = syncCapabilities }) {
+export function createToolboxManager({ getContext, getWorkspaces, post, postSkillsChanged = () => {}, home, maintenance = createSkillMaintenance({ home }), loadSelection = async () => [], saveSelection = async () => {}, loadAutomation = async () => [], saveAutomation = async () => {}, scan = () => scanCatalog({ home }), serviceFactory = createToolboxService, bundleWriter = writeBundle, clipboard = copyText, automationFactory = createAutomation, synchronizer = input => syncCapabilities({ ...input, home }) }) {
   const workspaces = new Map()
   const bundles = new Map()
   const locks = new Map()
@@ -55,7 +56,14 @@ export function createToolboxManager({ getContext, getWorkspaces, post, loadSele
     // A mutation must not return a scan that began before its filesystem changes.
     if (fresh && scanPending) await scanPending.catch(() => {})
     assertActive()
-    if (!scanPending) scanPending = scan().then(result => { assertActive(); catalogCache = result; return result }).finally(() => { scanPending = null })
+    if (!scanPending) {
+      const pending = scan().then(result => {
+        assertActive()
+        if (scanPending === pending) catalogCache = result
+        return result
+      }).finally(() => { if (scanPending === pending) scanPending = null })
+      scanPending = pending
+    }
     return scanPending
   }
   async function catalog() {
@@ -351,6 +359,13 @@ export function createToolboxManager({ getContext, getWorkspaces, post, loadSele
     return { copied, prompt }
   }
   const reviews = createReviewRequests({ context, workspaceFor, getWorkspaces, loadSelection,
-    selectedFor: async id => (await local(id)).selected, scanNow, clipboard })
+    selectedFor: async id => (await local(id)).selected, scanNow, clipboard, maintenance, home,
+    lock: (workspaceId, run) => locked('$sync', () => locked(workspaceId, run)),
+    changed: () => {
+      catalogCache = null
+      scanPending = null
+      // The write is already committed. A closing panel recovers the result from history.
+      if (!disposed) Promise.resolve().then(postSkillsChanged).catch(() => {})
+    } })
   return { ...reviews, catalog, activity, state, select, prepare, revoke, copy, copyAdaptation, initialize, setAutomation, sync, compare, dispose }
 }

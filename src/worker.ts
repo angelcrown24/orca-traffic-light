@@ -33,6 +33,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     getContext: () => orca.host.call('workspace.readContext'),
     getWorkspaces: () => orca.host.call('workspace.list'),
     post: () => orca.panels.post('toolbox.changed', {}),
+    postSkillsChanged: () => orca.panels.post('toolbox.skillsChanged', {}),
     loadSelection: id => orca.storage.get(`toolbox-selection:${id}`),
     saveSelection: (id, ids) => orca.storage.set(`toolbox-selection:${id}`, ids),
     loadAutomation: () => orca.storage.get('toolbox-automation'),
@@ -49,6 +50,10 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('toolbox.copyAdaptation', toolbox.copyAdaptation)
   orca.panels.handle('toolbox.automation', toolbox.setAutomation)
   orca.panels.handle('toolbox.skillReview', toolbox.skillReview)
+  orca.panels.handle('toolbox.previewSkillChange', toolbox.previewSkillChange)
+  orca.panels.handle('toolbox.applySkillChange', toolbox.applySkillChange)
+  orca.panels.handle('toolbox.skillChangeHistory', toolbox.skillChangeHistory)
+  orca.panels.handle('toolbox.undoSkillChange', toolbox.undoSkillChange)
   orca.panels.handle('toolbox.previewSkills', toolbox.previewSkills)
   orca.panels.handle('toolbox.inspectSkills', toolbox.inspectSkills)
   orca.panels.handle('toolbox.reviewSkills', toolbox.reviewSkills)

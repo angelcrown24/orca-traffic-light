@@ -28,17 +28,19 @@ export type ToolboxActivity = { workspaceId: string | null; recommendations: Jev
 export type SkillReviewFinding = {
   key: string
   name: string
-  kind: 'update' | 'variants' | 'missing' | 'provider' | 'conflict' | 'excluded' | 'successor'
+  kind: 'update' | 'variants' | 'missing' | 'provider' | 'conflict' | 'excluded' | 'successor' | 'redundant'
   providers: string[]
   ids: string[]
   stamp: string
   evidence: string[]
   line?: number
   lines?: number[]
+  referenceFixes?: { from: string; to: string; line: number }[]
   evidenceCount?: number
   evidenceDetails?: { path: string; state: 'added' | 'removed' | 'changed' | 'only'; ids?: string[] }[]
   comparisonIds?: [string, string]
   successorId?: string
+  removalCandidate?: { id: string; retainedId: string; reason: 'duplicate' | 'successor' }
   reviewedSourceStamp?: string
   requirement?: { file: string; field: string; line?: number }
   workspaceCount?: number
@@ -63,3 +65,21 @@ export type SkillInspection = {
   skills: { id: string; name: string; providers: string[] }[]
   evidence: { label: string; detail: string; source?: string }[]
 }
+
+export type SkillChangeKind = 'edit' | 'remove'
+export type SkillChangeInput = { workspaceId: string; id: string; kind: SkillChangeKind; retainedId?: string }
+export type SkillChangeApplyInput = SkillChangeInput & { revision: string; body?: string }
+export type SkillChangePreview = {
+  status: 'ready'
+  revision: string
+  name: string
+  path: string
+  paths: string[]
+  providers: string[]
+  retainedPath?: string
+  editsOriginal?: boolean
+  selectedWorkspaces?: number
+  referenceFixes?: SkillReviewFinding['referenceFixes']
+  body?: string
+} | { status: 'blocked'; reason: string }
+export type SkillChangeReceipt = { id: string; kind: SkillChangeKind; name: string; at: number; editsOriginal?: boolean }

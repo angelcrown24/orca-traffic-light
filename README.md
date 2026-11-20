@@ -74,6 +74,12 @@ Open **Review**, the tab immediately after **Library**, in a local workspace. Se
 
 <a href="docs/images/skill-review-en.png"><img src="docs/images/skill-review-en.png" width="390" alt="The Review tab in English, with a local skill finding and the evidence behind it"></a>
 
+- **Fix a finding.** Open the skill and choose **Edit instructions**. For a missing reference, edit the cited line or choose **Use suggested path** when the package contains one matching file. **Save changes** writes the draft and refreshes Review.
+- **Remove a skill or a duplicate.** Open a removal candidate to see which installation will go, which copy will stay and which providers use it. **Remove and link** archives an identical duplicate and links its old location to the copy you keep. To remove another installation, choose **Delete skill…** from its review and confirm the location.
+- **Undo a change.** Open **Recent changes** in the same workspace and choose **Undo**. The original instructions or archived installation can be restored after reopening Orca.
+
+<a href="docs/images/skill-removal-en.png"><img src="docs/images/skill-removal-en.png" width="390" alt="Deletion preview showing the duplicate installation, the copy to keep and the explicit confirmation button"></a>
+
 - To inspect a skill that has no finding, select **Choose a skill**. From its result, choose **Compare another skill** to review two installations together.
 - **Check again** refreshes the findings. **Set aside this version** hides a finding in this workspace until its evidence changes. You can restore it at any time.
 - **Additional AI analysis** can send selected excerpts to a local model. A text model writes a review. A Kev decision model identifies passages about when to use the skill and how to verify success. **Copy agent request** creates a read-only request for a conversation you choose.

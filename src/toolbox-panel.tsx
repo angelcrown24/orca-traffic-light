@@ -3,6 +3,7 @@ import { englishCount, panelLanguage } from './panel-language'
 import { clearAdaptation, limitationLabel, ProviderAdaptation } from './provider-adaptation'
 import type { CatalogItem, SyncResult, ToolboxCatalog, ToolboxState } from './toolbox-types'
 import './protocol'
+import { applyingSkillChange } from './skill-maintenance'
 import { SkillReview, checkSkills, resetSkillReview } from './skill-review'
 import type { SkillReviewFinding } from './toolbox-types'
 import { ArchitectureDiagram } from './toolbox-architecture'
@@ -121,6 +122,10 @@ export function setupToolbox(ctx: PanelContext, tab: Atom<string>): void {
   migrateReviewTab()
   canRead = () => read(ctx.visible) && ['library', 'review', 'structure'].includes(read(tab))
   canReview = () => read(ctx.visible) && read(tab) === 'review'
+  ctx.subscriptions.push(plugin.on('toolbox.skillsChanged', () => {
+    set(loaded, false)
+    if (canRead() && !applyingSkillChange() && !read(loading)) void openToolbox(true)
+  }))
   ctx.subscriptions.push(plugin.on('toolbox.changed', () => { if (canRead()) void refreshState() }))
   ctx.subscriptions.push(on('workspace.changed', ({ context }) => {
     migrateReviewTab()
@@ -368,6 +373,8 @@ export function ToolboxPanel() {
   const browse = [...pendingImports, ...imports.filter(alreadyShared), ...read(receipts).filter(group => !outstanding.has(group.key))]
   const section = (group: SourceGroup) => !outstanding.has(group.key) || alreadyShared(group)
     ? (ko ? '공용 보관함에 추가됨' : 'In your shared library') : sectionTitle(group)
+  const presentIds = new Set(items.map(i => i.id))
+  const missingSelections = current.selected.filter(id => !presentIds.has(id))
   const onlySelected = read(selectedOnly) && current.selected.length > 0
   const selection = onlySelected ? sourceGroups(items.filter(item => current.selected.includes(item.id))) : store
   const groups = importing ? browse : selection
@@ -387,6 +394,10 @@ export function ToolboxPanel() {
         <IconButton icon="settings" label={t.settings} tooltip={t.settings} size="sm" variant="ghost" tone={showSettings ? 'accent' : 'neutral'} onPress={() => set(settingsOpen, !showSettings)} />
       </Row>
     </Row>
+    {!importing && read(loaded) && !read(loading) && missingSelections.length ? <Callout tone="warning"><Stack gap="xs">
+      <Text size="sm">{ko ? '선택한 항목 중 설치본을 찾을 수 없는 항목 ' + missingSelections.length + '개' : englishCount(missingSelections.length, 'selected item') + ' missing from the library'}</Text>
+      <Row><Button size="sm" variant="outline" disabled={read(busy)} onPress={() => changeSelection(current.selected.filter(id => presentIds.has(id)))}>{ko ? '누락된 선택 해제' : 'Remove unavailable selections'}</Button></Row>
+    </Stack></Callout> : null}
     {showSettings ? <Box direction="column" gap="sm" padding="sm" border radius="sm"><Text weight="semibold" size="sm">{t.settings}</Text><ConnectionSettings /></Box> : null}
     <Row gap="xs" wrap>
       <Button size="sm" icon={importing ? 'blocks' : 'check'} variant={importing ? 'ghost' : 'solid'} tone={importing ? 'neutral' : 'accent'} onPress={() => { if (importing) changeView('store') }}>{(ko ? '공용 보관함 ' : 'Shared library ') + store.length}</Button>

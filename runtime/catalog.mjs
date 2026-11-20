@@ -190,28 +190,39 @@ async function configServers(path, format) {
   ]))
 }
 
+export const skillRoots = [
+  ['.agents/skills', 'Shared'], ['.codex/skills', 'Codex'], ['.claude/skills', 'Claude Code'],
+  ['.gemini/skills', 'Gemini CLI'], ['.gemini/config/skills', 'Antigravity'], ['.gemini/antigravity/skills', 'Antigravity']
+]
+
 export async function scanCatalog({ home = homedir() } = {}) {
   home = await realpath(home).catch(() => resolve(home))
   const items = [], warnings = [], records = new Map(), skillItems = new Map(), mcpItems = new Map()
-  const exclusions = new Map()
+  const exclusions = new Map(), skillInstallations = new Map(), packageFiles = new Map()
+  const noteInstallation = (file, path, logicalPath, provider, packageRoot) => {
+    if (!skillInstallations.has(file)) skillInstallations.set(file, [])
+    skillInstallations.get(file).push({ path, logicalPath, provider, packageRoot })
+  }
   let inspected = 0
-  const skillRoots = [
-    ['.agents/skills', 'Shared'], ['.codex/skills', 'Codex'], ['.claude/skills', 'Claude Code'],
-    ['.gemini/skills', 'Gemini CLI'], ['.gemini/config/skills', 'Antigravity'], ['.gemini/antigravity/skills', 'Antigravity']
-  ]
   for (const [root, provider] of skillRoots) {
     const visited = new Set()
-    async function walk(path, depth) {
+    async function walk(path, depth, logicalPath = path) {
       if (++inspected > ENTRY_LIMIT || items.length >= ITEM_LIMIT || depth > 7) return
       let canonical
       try { canonical = await realpath(path) } catch { return }
-      if (visited.has(canonical)) return
+      if (visited.has(canonical)) {
+        const file = packageFiles.get(canonical)
+        if (file) noteInstallation(file, path, logicalPath, provider, canonical)
+        return
+      }
       visited.add(canonical)
       const skillPath = join(canonical, 'SKILL.md')
       let resolved
       try {
         resolved = await realpath(skillPath)
         const content = await readBounded(resolved, SKILL_LIMIT)
+        packageFiles.set(canonical, resolved)
+        noteInstallation(resolved, path, logicalPath, provider, canonical)
         const existing = skillItems.get(resolved)
         if (existing) {
           if (!existing.providers.includes(provider)) existing.providers.push(provider)
@@ -226,6 +237,8 @@ export async function scanCatalog({ home = homedir() } = {}) {
       } catch (error) {
         if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') {
           warnings.push(`Skipped an unreadable or oversized skill in ${root}.`)
+          packageFiles.set(canonical, resolved ?? skillPath)
+          noteInstallation(resolved ?? skillPath, path, logicalPath, provider, canonical)
           const id = 'skill:' + hash(resolved ?? skillPath).slice(0, 24)
           const prior = exclusions.get(id)
           if (prior) {
@@ -246,7 +259,7 @@ export async function scanCatalog({ home = homedir() } = {}) {
         for await (const entry of directory) {
           if (inspected >= ENTRY_LIMIT || items.length >= ITEM_LIMIT) break
           if (entry.name === 'node_modules' || (entry.name.startsWith('.') && entry.name !== '.system')) continue
-          if (entry.isDirectory() || entry.isSymbolicLink()) await walk(join(canonical, entry.name), depth + 1)
+          if (entry.isDirectory() || entry.isSymbolicLink()) await walk(join(canonical, entry.name), depth + 1, join(logicalPath, entry.name))
         }
       } catch { /* Unavailable provider folders are normal. */ }
     }
@@ -290,7 +303,7 @@ export async function scanCatalog({ home = homedir() } = {}) {
     if (Object.keys(servers).length > 300) warnings.push(`MCP inventory from ${relative} was limited to 300 entries.`)
   }
   items.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
-  return decorateSharing({ items, warnings: [...new Set(warnings)], records, skillExclusions: [...exclusions.values()] }, home)
+  return decorateSharing({ items, warnings: [...new Set(warnings)], records, skillInstallations, skillExclusions: [...exclusions.values()] }, home)
 }
 
 export async function resolveRecord(record) {

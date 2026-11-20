@@ -1,5 +1,11 @@
 # Release history
 
+## [v0.13.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.13.0) · Repair and remove skills from Review
+
+- Edit the cited line of `SKILL.md` in the panel. When a referenced file moved within a package, use a verified path suggestion and save.
+- Review removal candidates with the affected providers and locations. Consolidating identical copies keeps the original provider path working through a link.
+- Delete an installation after confirming its scope. Restore archived installations and edited instructions from **Recent changes**, including after restarting Orca.
+
 ## [v0.12.2](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.12.2) · Keep reviews responsive while saving
 
 - Review waits for a pending Library change before enabling a fresh scan. A quick switch between tabs can no longer leave the workspace controls stuck in a saving state.
