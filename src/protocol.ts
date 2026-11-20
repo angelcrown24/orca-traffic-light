@@ -1,7 +1,7 @@
 import type { NativeResult } from './native-reader'
 import type { SessionShells } from './session-shells'
 import type { ResourceObservation } from './resource-classifier'
-import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis, SkillInspection, SkillChangeInput, SkillChangeApplyInput, SkillChangePreview, SkillChangeReceipt } from './toolbox-types'
+import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis, SkillInspection, SkillChangeInput, SkillChangeApplyInput, SkillChangePreview, SkillChangeReceipt, SkillBatchItem, SkillBatchPreview, SkillBatchResult, SkillBatchStatus, SkillBatchUndoResult, SkillBatchProgress } from './toolbox-types'
 export type Call = { id: string; tool: string; agent: string; state: 'running' | 'finished' | 'uncertain'; startedAt?: number }
 export {}
 declare module 'orca' {
@@ -20,6 +20,10 @@ declare module 'orca' {
     'toolbox.applySkillChange': { input: SkillChangeApplyInput; output: SkillChangeReceipt }
     'toolbox.skillChangeHistory': { input: { workspaceId: string }; output: SkillChangeReceipt[] }
     'toolbox.undoSkillChange': { input: { workspaceId: string; receiptId: string }; output: { restored: boolean } }
+    'toolbox.previewSkillBatch': { input: { workspaceId: string; items: SkillBatchItem[] }; output: SkillBatchPreview }
+    'toolbox.applySkillBatch': { input: { workspaceId: string; planId: string }; output: SkillBatchResult }
+    'toolbox.skillBatchStatus': { input: { workspaceId: string; planId: string }; output: SkillBatchStatus }
+    'toolbox.undoSkillBatch': { input: { workspaceId: string; batchId: string }; output: SkillBatchUndoResult }
     'toolbox.previewSkills': { input: RecommendationPreviewInput; output: RecommendationPreview }
     'toolbox.inspectSkills': { input: SkillAnalysisInput; output: SkillInspection }
     'toolbox.reviewSkills': { input: SkillAnalysisInput; output: SkillAnalysis }
@@ -31,6 +35,7 @@ declare module 'orca' {
     'calls.get': { output: { calls: Call[]; workspace: boolean; resources?: ResourceObservation[]; activeResources?: ResourceObservation[] } }
   }
   interface PluginPanelEvents {
+    'toolbox.skillBatchProgress': SkillBatchProgress
     'toolbox.skillsChanged': Record<string, never>
     'toolbox.changed': Record<string, never>
     'calls.changed': Record<string, never>

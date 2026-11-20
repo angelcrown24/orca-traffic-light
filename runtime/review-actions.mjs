@@ -1,3 +1,4 @@
+import { createReviewBatchRequests } from './review-batch.mjs'
 import { createHash } from 'node:crypto'
 
 // Workspace selections are private. Only the affected count leaves the worker.
@@ -17,11 +18,11 @@ export async function localSelections(getWorkspaces, loadSelection) {
   } catch { /* A partial listing cannot establish the number of affected workspaces. */ }
 }
 
-export function createSkillChangeRequests({ catalogFor, ensureLocal, maintenance, selectionsFor, lock, changed }) {
-  async function scopedPreview(data, input) {
-    const result = await maintenance.preview(data, input)
+export function createSkillChangeRequests({ catalogFor, ensureLocal, maintenance, selectionsFor, lock, changed, inspect, postBatchProgress }) {
+  async function scopedPreview(data, input, options) {
+    const result = await maintenance.preview(data, input, options)
     if (result.status !== 'ready') return { result }
-    const selections = await selectionsFor()
+    const selections = options ? options.selections : await selectionsFor()
     const affected = selections && [...selections].filter(([, ids]) => ids.has(input.id)).map(([id]) => id).sort()
     // Bind the confirmed operation to its workspace, physical copy, retained copy and impact.
     const revision = createHash('sha256').update(JSON.stringify([
@@ -62,5 +63,6 @@ export function createSkillChangeRequests({ catalogFor, ensureLocal, maintenance
       return result
     })
   }
-  return { previewSkillChange, applySkillChange, skillChangeHistory, undoSkillChange }
+  const batch = createReviewBatchRequests({ catalogFor, ensureLocal, maintenance, selectionsFor, lock, changed, inspect, scopedPreview, postBatchProgress })
+  return { ...batch, previewSkillChange, applySkillChange, skillChangeHistory, undoSkillChange }
 }

@@ -1,9 +1,10 @@
-import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis, SkillInspection, SkillChangeInput, SkillChangeApplyInput, SkillChangePreview, SkillChangeReceipt } from '../src/toolbox-types'
+import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis, SkillInspection, SkillChangeInput, SkillChangeApplyInput, SkillChangePreview, SkillChangeReceipt, SkillBatchItem, SkillBatchPreview, SkillBatchResult, SkillBatchStatus, SkillBatchUndoResult, SkillBatchProgress } from '../src/toolbox-types'
 export function createToolboxManager(options: {
   getContext: () => Promise<{ workspaceId?: string } | null>
   getWorkspaces: () => Promise<{ workspaces: { id: string; path: string; hostId: string | null }[] }>
   post: () => unknown
   postSkillsChanged?: () => unknown
+  postBatchProgress?: (progress: SkillBatchProgress) => unknown
   loadSelection?: (id: string) => Promise<unknown>
   saveSelection?: (id: string, ids: string[]) => Promise<unknown>
   loadAutomation?: () => Promise<unknown>
@@ -24,6 +25,10 @@ export function createToolboxManager(options: {
   applySkillChange(input: SkillChangeApplyInput): Promise<SkillChangeReceipt>
   skillChangeHistory(input: { workspaceId: string }): Promise<SkillChangeReceipt[]>
   undoSkillChange(input: { workspaceId: string; receiptId: string }): Promise<{ restored: boolean }>
+  previewSkillBatch(input: { workspaceId: string; items: SkillBatchItem[] }): Promise<SkillBatchPreview>
+  applySkillBatch(input: { workspaceId: string; planId: string }): Promise<SkillBatchResult>
+  skillBatchStatus(input: { workspaceId: string; planId: string }): Promise<SkillBatchStatus>
+  undoSkillBatch(input: { workspaceId: string; batchId: string }): Promise<SkillBatchUndoResult>
   previewSkills(input: RecommendationPreviewInput): Promise<RecommendationPreview>
   inspectSkills(input: SkillAnalysisInput): Promise<SkillInspection>
   reviewSkills(input: SkillAnalysisInput): Promise<SkillAnalysis>

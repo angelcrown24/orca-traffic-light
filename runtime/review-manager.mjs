@@ -4,7 +4,7 @@ import { createSkillReviewer } from './skill-review.mjs'
 import { buildSkillReviewRequest, previewRecommendations, reviewSkills as analyzeSkills } from './review-assistant.mjs'
 
 // Inventory, inspection and explicit maintenance share the same local-workspace boundary.
-export function createReviewRequests({ context, workspaceFor, getWorkspaces, loadSelection, selectedFor, scanNow, clipboard, maintenance, home, lock, changed }) {
+export function createReviewRequests({ context, workspaceFor, getWorkspaces, loadSelection, selectedFor, scanNow, clipboard, maintenance, home, lock, changed, postBatchProgress }) {
   const inspect = createSkillReviewer({ home })
   const inspectSelected = createSkillInspection(createSkillReviewer({ home }))
 
@@ -78,7 +78,7 @@ export function createReviewRequests({ context, workspaceFor, getWorkspaces, loa
     try { copied = await clipboard(prompt) === true } catch { /* The panel also supports manual copying. */ }
     return { copied, prompt }
   }
-  const actions = createSkillChangeRequests({ catalogFor, ensureLocal, maintenance, lock, changed,
+  const actions = createSkillChangeRequests({ catalogFor, ensureLocal, maintenance, lock, changed, inspect, postBatchProgress,
     selectionsFor: () => localSelections(getWorkspaces, loadSelection) })
   return { ...actions, skillReview, inspectSkills, previewSkills, reviewSkills, copySkillReview }
 }

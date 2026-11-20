@@ -10,7 +10,7 @@ import { createAutomation } from './automation.mjs'
 import { syncCapabilities } from './shared-sync.mjs'
 
 const MAX_SELECTION = 24
-export function createToolboxManager({ getContext, getWorkspaces, post, postSkillsChanged = () => {}, home, maintenance = createSkillMaintenance({ home }), loadSelection = async () => [], saveSelection = async () => {}, loadAutomation = async () => [], saveAutomation = async () => {}, scan = () => scanCatalog({ home }), serviceFactory = createToolboxService, bundleWriter = writeBundle, clipboard = copyText, automationFactory = createAutomation, synchronizer = input => syncCapabilities({ ...input, home }) }) {
+export function createToolboxManager({ getContext, getWorkspaces, post, postSkillsChanged = () => {}, postBatchProgress = () => {}, home, maintenance = createSkillMaintenance({ home }), loadSelection = async () => [], saveSelection = async () => {}, loadAutomation = async () => [], saveAutomation = async () => {}, scan = () => scanCatalog({ home }), serviceFactory = createToolboxService, bundleWriter = writeBundle, clipboard = copyText, automationFactory = createAutomation, synchronizer = input => syncCapabilities({ ...input, home }) }) {
   const workspaces = new Map()
   const bundles = new Map()
   const locks = new Map()
@@ -359,7 +359,7 @@ export function createToolboxManager({ getContext, getWorkspaces, post, postSkil
     return { copied, prompt }
   }
   const reviews = createReviewRequests({ context, workspaceFor, getWorkspaces, loadSelection,
-    selectedFor: async id => (await local(id)).selected, scanNow, clipboard, maintenance, home,
+    selectedFor: async id => (await local(id)).selected, scanNow, clipboard, maintenance, home, postBatchProgress,
     lock: (workspaceId, run) => locked('$sync', () => locked(workspaceId, run)),
     changed: () => {
       catalogCache = null

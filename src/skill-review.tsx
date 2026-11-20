@@ -1,5 +1,6 @@
 import { atom, Button, Callout, EmptyState, env, Heading, List, ListItem, plugin, read, Row, set, Stack, Text } from 'orca'
-import { ChangeButtons, ChangeForm, ChangeHistory, closeSkillChange, hasSkillChange, resetSkillMaintenance } from './skill-maintenance'
+import { ChangeButtons, ChangeForm, ChangeHistory, closeSkillChange, hasSkillChange, refreshChangeHistory, resetSkillMaintenance } from './skill-maintenance'
+import { BatchEntry, hasSkillBatch, resetSkillBatch, SkillBatchPanel } from './skill-batch'
 import { englishCount, panelLanguage } from './panel-language'
 import { InspectionResult, inspectSelection, RecommendationPreviewPanel, resetReviewAssistant, SkillPicker } from './review-assistant'
 import type { CatalogItem, SkillReviewFinding, SkillReviewReport } from './toolbox-types'
@@ -58,7 +59,7 @@ export function resetSkillReview() {
   owner = null
   set(screen, 'findings'); set(focused, null); set(focusedIds, []); set(baseline, undefined); set(sourceStatus, 'idle')
   set(review, null); set(status, 'idle'); set(showDeferred, false); set(page, 0); set(candidatePage, 0)
-  resetReviewAssistant(); resetSkillMaintenance()
+  resetReviewAssistant(); resetSkillMaintenance(); resetSkillBatch()
 }
 
 export async function checkSkills(workspaceId: string | null, force = false): Promise<void> {
@@ -206,6 +207,12 @@ export function SkillReview({ workspaceId, items, selected, openSource, canOpen,
     resetReviewAssistant(); set(focused, null); set(focusedIds, []); set(screen, 'findings'); set(page, 0)
     await onCheck()
   }
+  async function afterBatch(openHistory = false) {
+    await afterChange()
+    if (workspaceId && owner === workspaceId) await refreshChangeHistory(workspaceId, openHistory)
+  }
+  if (workspaceId && hasSkillBatch()) return <SkillBatchPanel workspaceId={workspaceId}
+    onDone={() => afterBatch()} onHistory={() => afterBatch(true)} />
   if (workspaceId && hasSkillChange()) return <ChangeForm onDone={afterChange} />
   if (workspaceId && read(screen) !== 'findings') return <Stack gap="sm">
     <Row><Button size="sm" variant="ghost" onPress={back}>{ko ? '점검 목록으로' : 'Back to findings'}</Button></Row>
@@ -214,8 +221,13 @@ export function SkillReview({ workspaceId, items, selected, openSource, canOpen,
         {group.findings.filter(f => !f.ids.length).map(f => <Text size="sm" key={f.key}>{f.evidence.map(reason => (t as Record<string, string>)[reason] ?? reason).join(' · ')}</Text>)}
         {actions()}</Stack> : <InspectionResult workspaceId={workspaceId} items={items} onCompare={pick} actions={actions()} />}
   </Stack>
+  const stamps = new Map(read(deferred))
+  const active = data?.findings.filter(f => stamps.get(f.key) !== f.stamp) ?? []
+  const viewingDeferred = read(showDeferred) && active.length < (data?.findings.length ?? 0)
   return <Stack gap="sm">
     {workspaceId ? <Row justify="between" align="center" wrap gap="xs">
+      {current === 'ready' && !refreshing && !loadFailed && !viewingDeferred ?
+        <BatchEntry workspaceId={workspaceId} findings={active} items={items} /> : null}
       <Button size="sm" variant="outline" icon="search" disabled={refreshing || loadFailed || !items.some(item => item.kind === 'skill')} onPress={() => pick()}>{ko ? '스킬 직접 선택' : 'Choose a skill'}</Button>
       {data && current === 'ready' && !refreshing && !loadFailed ? <Button size="sm" variant="ghost" icon="refresh" onPress={onCheck}>{t.rescan}</Button> : null}</Row> : null}
     {!workspaceId ? <EmptyState icon="folder" title={t.choose} /> : current === 'loading' || refreshing ? <Text size="sm" muted>{t.loading}</Text>

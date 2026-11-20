@@ -82,4 +82,31 @@ export type SkillChangePreview = {
   referenceFixes?: SkillReviewFinding['referenceFixes']
   body?: string
 } | { status: 'blocked'; reason: string }
-export type SkillChangeReceipt = { id: string; kind: SkillChangeKind; name: string; at: number; editsOriginal?: boolean }
+export type SkillChangeReceipt = { id: string; kind: SkillChangeKind; name: string; at: number; editsOriginal?: boolean; batchId?: string; batchIndex?: number }
+
+export type SkillBatchItem = { key: string; stamp: string; id: string }
+export type SkillBatchAction = 'fix' | 'duplicate' | 'successor'
+type SkillBatchRow = { key: string; id: string; name: string; action: SkillBatchAction }
+export type SkillBatchPreviewRow = SkillBatchRow & {
+  status: 'ready' | 'blocked'
+  reason?: string
+  path?: string
+  paths?: string[]
+  providers?: string[]
+  retainedPath?: string
+  retainedName?: string
+  selectedWorkspaces?: number
+  editsOriginal?: boolean
+  fixes?: SkillReviewFinding['referenceFixes']
+}
+export type SkillBatchResultRow = SkillBatchRow & {
+  status: 'applied' | 'skipped' | 'failed'
+  reason?: string
+  receipt?: SkillChangeReceipt
+}
+export type SkillBatchPreview = { planId: string; rows: SkillBatchPreviewRow[] }
+export type SkillBatchResult = { batchId: string; rows: SkillBatchResultRow[] }
+export type SkillBatchStatus = { status: 'missing' | 'ready' | 'running' } | { status: 'done'; result: SkillBatchResult }
+export type SkillBatchUndoRow = { receiptId: string; name: string; status: 'restored' | 'skipped' | 'failed'; reason?: string }
+export type SkillBatchUndoResult = { batchId: string; rows: SkillBatchUndoRow[] }
+export type SkillBatchProgress = { workspaceId: string; batchId: string; completed: number; total: number }

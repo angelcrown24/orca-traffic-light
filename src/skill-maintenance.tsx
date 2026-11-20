@@ -1,11 +1,10 @@
-import { atom, Button, Callout, CodeView, Collapsible, env, Heading, Input, List, ListItem, plugin, read, RelativeTime, Row, set, Stack, Text, Textarea } from 'orca'
-import { panelLanguage } from './panel-language'
+import { atom, Button, Callout, CodeView, Collapsible, Heading, Input, List, ListItem, plugin, read, RelativeTime, Row, set, Stack, Text, Textarea } from 'orca'
+import { blockedReason, displayPath, instructionFile, ko, providers, say } from './skill-change-display'
+import { instructionLines, targetsForLines } from '../runtime/skill-reference-targets.mjs'
+import { undoSkillBatch } from './skill-batch'
 import type { CatalogItem, SkillChangeKind, SkillChangePreview, SkillChangeReceipt, SkillReviewFinding } from './toolbox-types'
 import './protocol'
 
-const ko = () => panelLanguage(env.locale) === 'ko'
-const say = (en: string, kr: string) => ko() ? kr : en
-const providers = (names: string[]) => names.map(n => ko() && n === 'Shared' ? '공용' : n).join(' · ')
 type Target = Pick<CatalogItem, 'id' | 'name' | 'providers'>
 type Plan = { workspaceId: string; kind: SkillChangeKind; targets: Target[]; id?: string; retainedId?: string; retainedName?: string; retainedShared?: boolean; findings: SkillReviewFinding[] }
 const plan = atom<Plan | null>(null)
@@ -66,24 +65,6 @@ export function ChangeButtons({ workspaceId, targets, findings, candidate, items
   </Row>
 }
 
-function displayPath(path: string) {
-  return /^(?:~[/\\]|[/\\]|[a-z]:[/\\])/i.test(path) ? path : '~/' + path
-}
-function instructionFile(root: string) {
-  const separator = root.includes('\\') ? '\\' : '/'
-  return root.endsWith(separator + 'SKILL.md') ? root : root.replace(/[/\\]$/, '') + separator + 'SKILL.md'
-}
-function blockedReason(code: string, editing: boolean) {
-  switch (code) {
-    case 'protected-root': return say('This installation is outside the editable skill folders.', '이 설치본은 수정할 수 있는 스킬 폴더 밖에 있습니다.')
-    case 'nested-installation': return say('Removing this folder would also remove another installed skill. Review that installation separately.', '이 폴더를 삭제하면 안에 설치된 다른 스킬도 영향을 받습니다. 해당 설치본을 별도로 점검하세요.')
-    case 'managed-snapshot': return editing ? say('This is a managed shared snapshot. Edit its original, then update it in Library.', '관리 중인 공용 스냅샷입니다. 원본을 수정한 뒤 공용 도구에서 업데이트하세요.') : say('The shared registry references this installation. Removing it here would break its published copy.', '공용 보관함이 이 설치본을 참조합니다. 삭제하면 배포된 공용본의 연결이 끊어집니다.')
-    case 'inventory-incomplete': return say('Some linked installations could not be checked. Refresh the review after they are accessible.', '일부 연결된 설치본을 확인하지 못했습니다. 해당 위치에 접근할 수 있을 때 다시 점검하세요.')
-    case 'changed': case 'stale': return say('The installation changed. Check it again before continuing.', '설치본이 바뀌었습니다. 다시 점검한 뒤 진행하세요.')
-    case 'unreadable': return say('The instruction file could not be read. Check local access permissions.', '지침 파일을 읽을 수 없습니다. 파일의 접근 권한을 확인하세요.')
-    default: return say('This package layout cannot be changed here.', '이 설치 구조는 패널에서 변경할 수 없습니다.')
-  }
-}
 async function apply(onDone: () => Promise<void>) {
   const p = read(plan), ready = read(preview)
   if (read(busy) || !p?.id || ready?.status !== 'ready') return
@@ -99,26 +80,24 @@ async function apply(onDone: () => Promise<void>) {
   finally { if (key === visit) set(busy, null) }
 }
 
-// Paths in Markdown links, code spans, and quoted/space-delimited commands.
-function useReference(line: string, from: string, to: string): string {
-  if (!from || from === to) return line
-  let offset = 0, result = ''
-  const boundary = (c: string | undefined) => !c || /[\s`'"()<>\[\]{},;:!?]/.test(c)
-  for (let index = line.indexOf(from); index >= 0; index = line.indexOf(from, offset)) {
-    const end = index + from.length
-    const terminator = line[end] === '.' && boundary(line[end + 1])
-    const exact = boundary(line[index - 1]) && (boundary(line[end]) || terminator)
-    result += line.slice(offset, index) + (exact ? to : from)
-    offset = end
+function useReference(line: string, targets: { path: string; start: number }[], from: string, to: string) {
+  for (const { start } of targets.filter(target => target.path === from).reverse()) {
+    line = line.slice(0, start) + to + line.slice(start + from.length)
   }
-  return result + line.slice(offset)
+  return line
 }
 
 function ReferenceEditor({ request, original, verified }: { request: Plan; original: string; verified?: SkillReviewFinding['referenceFixes'] }) {
-  const lines = read(draft).split(/(\r\n|\n|\r)/)
+  const body = read(draft), targets = targetsForLines(instructionLines(body))
+  const lines = body.split(/(\r\n|\n|\r)/)
   const originals = original.split(/\r\n|\n|\r/)
-  const refs = new Map<number, string[]>()
+  const refs = new Map<number, Set<string>>()
   const suggestions = verified ?? request.findings.filter(f => f.kind === 'missing' && f.ids.includes(request.id!)).flatMap(f => f.referenceFixes ?? [])
+  function addMissing(line: number | undefined, path: string) {
+    if (!line || !originals[line - 1]?.includes(path)) return
+    const values = refs.get(line) ?? new Set<string>()
+    values.add(path); refs.set(line, values)
+  }
   function changeLine(number: number, value: string) {
     const changed = read(draft).split(/(\r\n|\n|\r)/)
     changed[(number - 1) * 2] = value; set(draft, changed.join(''))
@@ -126,15 +105,16 @@ function ReferenceEditor({ request, original, verified }: { request: Plan; origi
   for (const f of request.findings.filter(f => f.kind === 'missing' && f.ids.includes(request.id!))) {
     f.evidence.forEach((path, i) => {
       const line = f.lines?.[i] ?? (i === 0 ? f.line : undefined)
-      if (line && originals[line - 1]?.includes(path)) refs.set(line, [...(refs.get(line) ?? []), path])
+      addMissing(line, path)
     })
   }
+  for (const fix of suggestions) addMissing(fix.line, fix.from)
   if (!refs.size || read(fullEditor)) return <Textarea label="SKILL.md" rows={14} value={read(draft)} disabled={!!read(busy)} onChange={body => set(draft, body)} />
-  return <Stack gap="sm">{[...refs].map(([line, paths]) => <Stack key={line} gap="xs">
-    <Text size="xs" muted>{say('Missing · ', '누락 · ') + paths.join(' · ')}</Text>
+  return <Stack gap="sm">{[...refs].sort(([left], [right]) => left - right).map(([line, paths]) => <Stack key={line} gap="xs">
+    <Text size="xs" muted>{say('Missing · ', '누락 · ') + [...paths].join(' · ')}</Text>
     <Input label={say('Edit line ', '수정할 줄 · ') + line} value={lines[(line - 1) * 2]} disabled={!!read(busy)} onChange={value => changeLine(line, value)} />
-    {suggestions.filter(fix => fix.line === line && paths.includes(fix.from)).map(fix => {
-      const source = lines[(line - 1) * 2], updated = useReference(source, fix.from, fix.to)
+    {suggestions.filter(fix => fix.line === line && paths.has(fix.from)).map(fix => {
+      const source = lines[(line - 1) * 2], updated = useReference(source, targets.get(line) ?? [], fix.from, fix.to)
       if (source === updated) return null
       return <Stack key={fix.from} gap="xs"><Text size="xs">{say('Found in this package · ', '패키지에서 찾은 파일 · ') + fix.to}</Text>
         <Row><Button size="sm" variant="outline" disabled={!!read(busy)} onPress={() => changeLine(line, updated)}>{say('Use suggested path', '제안 경로 사용')}</Button></Row></Stack>
@@ -187,6 +167,11 @@ async function loadHistory(workspaceId: string) {
     if (key === historyRequest) { set(history, result); set(historyState, 'ready') }
   } catch { if (key === historyRequest) set(historyState, 'error') }
 }
+export async function refreshChangeHistory(workspaceId: string, open = false) {
+  if (open) set(historyOpen, true)
+  if (read(historyOpen)) await loadHistory(workspaceId)
+}
+
 async function undo(workspaceId: string, item: SkillChangeReceipt, onDone: () => Promise<void>) {
   if (read(busy)) return
   const key = visit
@@ -204,6 +189,13 @@ async function undo(workspaceId: string, item: SkillChangeReceipt, onDone: () =>
 export function ChangeHistory({ workspaceId, onDone }: { workspaceId: string; onDone: () => Promise<void> }) {
   const edited = read(receipt), entries = read(history), state = read(historyState)
   const action = (r: SkillChangeReceipt) => r.kind === 'edit' ? say('Edited', '수정됨') : say('Deleted', '삭제됨')
+  const groups = new Map<string, SkillChangeReceipt[]>()
+  for (const entry of entries) {
+    const key = entry.batchId ?? entry.id
+    const group = groups.get(key)
+    if (group) group.push(entry)
+    else groups.set(key, [entry])
+  }
   return <Stack gap="xs">
     {edited ? <Callout tone="success"><Row justify="between" align="center" wrap><Text size="sm">{edited.name + ' · ' + action(edited)}</Text>
       <Button size="sm" variant="outline" disabled={!!read(busy)} onPress={() => undo(workspaceId, edited, onDone)}>{say('Undo', '되돌리기')}</Button></Row></Callout> : null}
@@ -216,9 +208,26 @@ export function ChangeHistory({ workspaceId, onDone }: { workspaceId: string; on
       historyRequest++
     }}>
       {state === 'loading' ? <Text size="sm" muted>{say('Loading changes…', '변경 기록을 읽는 중…')}</Text> : state === 'error' ? <Button size="sm" variant="outline" onPress={() => loadHistory(workspaceId)}>{say('Retry history', '변경 기록 다시 읽기')}</Button> : entries.length ?
-        <Stack gap="sm">{entries.map(item => <Row key={item.id} wrap align="center" justify="between"><Stack gap="none"><Text size="sm" weight="semibold">{item.name}</Text>
+        <Stack gap="sm">{[...groups.values()].map(group => {
+          const item = group[0], batchId = item.batchId
+          if (batchId) return <Stack key={batchId} gap="xs">
+            <Row wrap align="center" justify="between"><Stack gap="none">
+              <Text size="sm" weight="semibold">{say('Batch changes', '일괄 변경')} · {group.length}</Text>
+              <RelativeTime at={item.at} muted /></Stack>
+              <Button size="sm" variant="outline" disabled={!!read(busy)} onPress={() => {
+                const current = visit
+                return undoSkillBatch(workspaceId, batchId, async () => {
+                  await onDone()
+                  if (current === visit) await refreshChangeHistory(workspaceId)
+                })
+              }}>{say('Undo batch', '일괄 되돌리기')}</Button></Row>
+            <Collapsible title={say('View changes', '변경 내역 보기')}><Stack gap="xs">{group.map(entry =>
+              <Row key={entry.id} wrap align="center" justify="between"><Text size="sm">{entry.name + ' · ' + action(entry)}</Text>
+                <Button size="sm" variant="ghost" disabled={!!read(busy)} onPress={() => undo(workspaceId, entry, onDone)}>{say('Undo', '되돌리기')}</Button></Row>)}</Stack></Collapsible>
+          </Stack>
+          return <Row key={item.id} wrap align="center" justify="between"><Stack gap="none"><Text size="sm" weight="semibold">{item.name}</Text>
           <Row gap="xs" wrap><Text size="xs" muted>{action(item)}</Text><RelativeTime at={item.at} muted /></Row></Stack>
-          <Button size="sm" variant="outline" disabled={!!read(busy)} onPress={() => undo(workspaceId, item, onDone)}>{say('Undo', '되돌리기')}</Button></Row>)}</Stack>
+          <Button size="sm" variant="outline" disabled={!!read(busy)} onPress={() => undo(workspaceId, item, onDone)}>{say('Undo', '되돌리기')}</Button></Row>})}</Stack>
         : <Text size="sm" muted>{say('No changes to undo in this workspace.', '이 작업공간에서 되돌릴 변경이 없습니다.')}</Text>}
     </Collapsible>
   </Stack>

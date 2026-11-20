@@ -1,5 +1,10 @@
 # Release history
 
+## [v0.14.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.14.0) · Batch actions in Skill Review
+
+- Select multiple findings in Review and confirm the proposed changes together. Supported actions include verified path repairs, duplicate consolidation and removal of explicitly superseded installations.
+- See the outcome for each item. Undo the completed changes together from the same workspace’s **Recent changes**.
+
 ## [v0.13.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.13.0) · Repair and remove skills from Review
 
 - Edit the cited line of `SKILL.md` in the panel. When a referenced file moved within a package, use a verified path suggestion and save.

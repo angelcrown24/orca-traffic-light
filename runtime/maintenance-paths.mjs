@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { lstat, readFile, readlink, realpath } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { skillRoots } from './catalog.mjs'
 import { inspectSkillPackage, readSharedRegistry } from './shared-sync.mjs'
 
@@ -88,7 +88,23 @@ async function target(data, home, id, registrations, allowOriginal = false) {
     editsOriginal, registration, aliases, paths: [...paths].sort() }
 }
 
-export async function prepare(data, home, { id, kind, retainedId }) {
+async function verifySuccessor(data, home, source, id) {
+  const item = data.items.find(row => row.kind === 'skill' && row.id === id)
+  const record = data.records.get(id)
+  if (!item?.available || item.providerOnly || !record?.path || ['conflict', 'update'].includes(item.sharing?.state) ||
+      !source.providers.every(provider => item.providers.includes(provider))) throw fail('STALE', 'changed')
+  const root = dirname(record.path)
+  const sourceRoot = resolve(home, source.root)
+  if (root === sourceRoot || below(sourceRoot, root) || await realpath(root) !== root) throw fail('STALE', 'changed')
+  const info = await lstat(root)
+  const pkg = await inspectSkillPackage(root, true)
+  const instructions = pkg.entries.find(entry => entry.path === 'SKILL.md')
+  if (!info.isDirectory() || !instructions?.content || hash(instructions.content) !== record.fingerprint) throw fail('STALE', 'changed')
+  return { id, name: item.name, root: below(home, root) ? relative(home, root) : root, ino: info.ino, dev: info.dev, mode: info.mode & 0o777,
+    fingerprint: pkg.fingerprint, providers: [...item.providers].sort() }
+}
+
+export async function prepare(data, home, { id, kind, retainedId }, { batch = false, successorId } = {}) {
   if (!['edit', 'remove'].includes(kind) || typeof id !== 'string' || (retainedId !== undefined && (kind !== 'remove' || typeof retainedId !== 'string' || id === retainedId))) throw fail('INVALID', 'invalid')
   const registry = await readSharedRegistry(home).catch(() => { throw fail('PROTECTED', 'inventory-incomplete') })
   const registrations = Object.entries(registry.skills)
@@ -96,8 +112,16 @@ export async function prepare(data, home, { id, kind, retainedId }) {
   const retained = retainedId === undefined ? undefined : await target(data, home, retainedId, registrations)
   if (retained && (retained.name.toLowerCase() !== source.name.toLowerCase() || retained.fingerprint !== source.fingerprint || retained.mode !== source.mode ||
       retained.root === source.root || below(source.root, retained.root) || below(retained.root, source.root))) throw fail('STALE', 'changed')
-  const revision = hash(JSON.stringify([kind, source, retained]))
-  return { source, retained, revision }
+  if (successorId !== undefined && (!batch || kind !== 'remove' || retained || typeof successorId !== 'string' || successorId === id)) throw fail('INVALID', 'invalid')
+  const successor = successorId === undefined ? undefined : await verifySuccessor(data, home, source, successorId)
+  let keeperPin = retained
+  if (batch && retained) {
+    // An earlier row may add a provider link to this same keeper. Only its original is modified.
+    const { providers, aliases, paths, ...installation } = retained
+    keeperPin = installation
+  }
+  const revision = hash(JSON.stringify(batch ? [kind, source, keeperPin, successor] : [kind, source, retained]))
+  return { source, retained, successor, revision }
 }
 
 export async function readCurrentFile(path) {

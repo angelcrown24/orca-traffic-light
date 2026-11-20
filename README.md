@@ -1,6 +1,6 @@
 # Traffic Light for Orca
 
-See which skills and tools your agents use, and share the ones a workspace needs across providers. Traffic Light adds a sidebar to Orca with an activity feed, a shared library, and a diagram of how the two connect.
+See which skills and tools your agents use, and share the ones a workspace needs across providers. Use the sidebar to follow session activity, manage the shared library, review installed skills, and see how providers connect to the library.
 
 The sidebar follows Orca’s language. Korean locales use Korean. All other locales, including an unspecified language, use English. Tool names and descriptions appear as their authors supplied them.
 
@@ -73,6 +73,10 @@ All screenshots show example workspaces with sample data.
 Open **Review**, the tab immediately after **Library**, in a local workspace. Select a finding to see what Traffic Light found, the recommended next step, and the file or line behind it. For example, a missing-reference finding shows the exact reference and where the skill uses it. This check runs on your machine and uses zero model tokens.
 
 <a href="docs/images/skill-review-en.png"><img src="docs/images/skill-review-en.png" width="390" alt="The Review tab in English, with a local skill finding and the evidence behind it"></a>
+
+**Process several findings together.** Choose **Batch actions** in Review, select the changes you want, and preview them. Review preselects compatible file-path repairs and identical-copy links. To remove an old version whose instructions name an installed replacement, select that entry yourself. Expand a preview entry to see which paths will change, then apply your selection once. Each result shows whether the change was applied, skipped or failed. **Recent changes** lets you undo the batch or an individual change after reopening Orca.
+
+<a href="docs/images/skill-batch-en.png"><img src="docs/images/skill-batch-en.png" width="390" alt="Batch preview with a Claude Code duplicate and a verified file-path repair expanded to show the exact change"></a>
 
 - **Fix a finding.** Open the skill and choose **Edit instructions**. For a missing reference, edit the cited line or choose **Use suggested path** when the package contains one matching file. **Save changes** writes the draft and refreshes Review.
 - **Remove a skill or a duplicate.** Open a removal candidate to see which installation will go, which copy will stay and which providers use it. **Remove and link** archives an identical duplicate and links its old location to the copy you keep. To remove another installation, choose **Delete skill…** from its review and confirm the location.

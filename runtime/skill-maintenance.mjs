@@ -8,9 +8,15 @@ import { inspectSkillPackage } from './shared-sync.mjs'
 import { checkLocation, fail, hash, isUserSkillDirectory, prepare, readCurrentFile, statOrNull } from './maintenance-paths.mjs'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const isBatchId = id => typeof id === 'string' && uuid.test(id)
+const validBatchIndex = index => Number.isSafeInteger(index) && index >= 0 && index < 10000
+const isReceiptId = value => typeof value === 'string' && (uuid.test(value) ||
+  (uuid.test(value.slice(0, 36)) && /^\.(?:0|[1-9]\d{0,3})$/.test(value.slice(36))))
 const stale = () => fail('STALE', 'changed')
 const conflict = () => fail('CONFLICT', 'A destination or backup changed. The existing files were preserved.')
-const receipt = ({ id, kind, name, at, editsOriginal }) => ({ id, kind, name, at, ...(editsOriginal ? { editsOriginal: true } : {}) })
+const receipt = ({ id, kind, name, at, editsOriginal, batchId, batchIndex }) => ({
+  id, kind, name, at, ...(editsOriginal ? { editsOriginal: true } : {}), ...(batchId ? { batchId, batchIndex } : {})
+})
 
 async function directory(path, create) {
   if (create) await mkdir(path, { mode: 0o700 }).catch(error => { if (error.code !== 'EEXIST') throw error })
@@ -33,7 +39,9 @@ async function loadRecord(home, folder) {
   const row = JSON.parse(await readFile(path, 'utf8'))
   const validPath = part => typeof part === 'string' && resolve(home, part) === join(home, part) &&
     !part.split(/[\\/]/).some(segment => !segment || segment === '.' || segment === '..') && isUserSkillDirectory(home, resolve(home, part))
-  if (row.id !== basename(folder) || !uuid.test(row.id) || !['edit', 'remove'].includes(row.kind) || !['prepared', 'applied', 'restored'].includes(row.state) ||
+  if (row.id !== basename(folder) || !isReceiptId(row.id) ||
+      (row.batchId === undefined ? !uuid.test(row.id) :
+        !isBatchId(row.batchId) || !validBatchIndex(row.batchIndex) || row.id !== row.batchId + '.' + row.batchIndex) || !['edit', 'remove'].includes(row.kind) || !['prepared', 'applied', 'restored'].includes(row.state) ||
       !validPath(row.root) || (row.retainedRoot && !validPath(row.retainedRoot)) || !Array.isArray(row.aliases) ||
       row.aliases.some(a => !validPath(a.rel) || typeof a.link !== 'string')) throw conflict()
   return row
@@ -167,9 +175,9 @@ export function createSkillMaintenance({ home = homedir() } = {}) {
     return { root, base, archive }
   }
 
-  async function preview(data, input) {
+  async function preview(data, input, options) {
     try {
-      const { source, retained, revision } = await prepare(data, await realpath(home), input)
+      const { source, retained, successor, revision } = await prepare(data, await realpath(home), input, options)
       let referenceFixes
       if (input.kind === 'edit') {
         const pkg = await inspectSkillPackage(join(await realpath(home), source.root))
@@ -177,26 +185,43 @@ export function createSkillMaintenance({ home = homedir() } = {}) {
         referenceFixes = await currentReferenceFixes(pkg.root, pkg.entries, source.body)
       }
       return { status: 'ready', revision, name: source.name, path: source.root, paths: source.paths, providers: source.providers,
-        ...(source.editsOriginal ? { editsOriginal: true } : {}), ...(input.kind === 'edit' ? { body: source.body, referenceFixes } : {}), ...(retained ? { retainedPath: retained.root } : {}) }
+        ...(source.editsOriginal ? { editsOriginal: true } : {}), ...(input.kind === 'edit' ? { body: source.body, referenceFixes } : {}), ...(retained ? { retainedPath: retained.root } : {}),
+        ...(successor ? { successorPath: successor.root } : {}) }
     } catch (error) {
       if (error.code === 'INVALID') throw error
       return { status: 'blocked', reason: ['PROTECTED', 'STALE'].includes(error.code) ? error.message : 'unreadable' }
     }
   }
 
-  async function apply(_data, input, checkContext = async () => {}) {
+  async function apply(_data, input, checkContext = async () => {}, group) {
+    if (group && (!isBatchId(group.batchId) || !validBatchIndex(group.batchIndex))) throw fail('INVALID', 'invalid')
     if (typeof input.workspaceId !== 'string' || !input.workspaceId || typeof input.revision !== 'string') throw fail('INVALID', 'invalid')
     if (input.kind === 'edit' && (typeof input.body !== 'string' || !input.body.trim() || input.body.includes('\0') || Buffer.byteLength(input.body) > 65536)) throw fail('INVALID', 'invalid')
     await checkContext()
     const { root: home, base, archive } = await locations(true)
     return locked(base, async () => {
-      const { source, retained, revision } = await prepare(await scanCatalog({ home }), home, input)
+      const id = group ? group.batchId + '.' + group.batchIndex : randomUUID()
+      const folder = join(archive, id)
+      const intent = group && hash(JSON.stringify([input.kind, input.id, input.retainedId, group.successorId, input.revision, input.body]))
+      if (group && await statOrNull(folder)) {
+        const existing = await loadRecord(home, folder)
+        if (existing.workspaceId !== input.workspaceId || existing.intent !== intent) throw stale()
+        if (existing.state !== 'applied') throw fail('STALE', existing.state === 'prepared' ? 'batch-item-needs-recovery' : 'batch-item-restored')
+        return receipt(existing)
+      }
+      if (group) {
+        const member = (await readdir(archive)).find(id => id.startsWith(group.batchId + '.') && isReceiptId(id))
+        if (member && (await loadRecord(home, join(archive, member))).workspaceId !== input.workspaceId) throw fail('INVALID', 'invalid')
+      }
+      const { source, retained, successor, revision } = await prepare(await scanCatalog({ home }), home, input,
+        group ? { batch: true, successorId: group.successorId } : undefined)
       if (input.revision !== revision) throw stale()
       if (input.kind === 'edit' && source.body === input.body) throw fail('INVALID', 'unchanged')
       await checkContext()
-      const id = randomUUID(), folder = join(archive, id), root = resolve(home, source.root)
+      const root = resolve(home, source.root)
       await mkdir(folder, { mode: 0o700 })
       const row = { id, workspaceId: input.workspaceId, kind: input.kind, name: source.name, at: Date.now(), state: 'prepared',
+        ...(group ? { batchId: group.batchId, batchIndex: group.batchIndex, intent } : {}),
         root: source.root, ...(source.editsOriginal ? { editsOriginal: true } : {}), ino: source.ino, dev: source.dev, mode: source.mode, aliases: source.aliases, fingerprint: source.fingerprint,
         ...(retained ? { retainedRoot: retained.root } : {}),
         ...(input.kind === 'edit' ? { before: hash(source.body), after: hash(input.body), fileMode: source.fileMode } : {}) }
@@ -211,6 +236,7 @@ export function createSkillMaintenance({ home = homedir() } = {}) {
           await checkContext()
           await verifyPackage(root, row)
           if (retained) await verifyPackage(resolve(home, retained.root), retained)
+          if (successor) await verifyPackage(resolve(home, successor.root), successor)
           for (const alias of source.aliases) if (!await checkAlias(home, alias)) throw stale()
           await rename(root, join(folder, 'package'))
           changed = true
@@ -241,7 +267,7 @@ export function createSkillMaintenance({ home = homedir() } = {}) {
     let paths
     try { paths = await locations() } catch (error) { if (error.code === 'ENOENT') return []; throw error }
     const result = []
-    for (const id of await readdir(paths.archive)) if (uuid.test(id)) {
+    for (const id of await readdir(paths.archive)) if (isReceiptId(id)) {
       const row = await loadRecord(paths.root, join(paths.archive, id)).catch(() => null)
       if (row && row.workspaceId === workspaceId && row.state !== 'restored') result.push(receipt(row))
     }
@@ -249,7 +275,7 @@ export function createSkillMaintenance({ home = homedir() } = {}) {
   }
 
   async function undo({workspaceId, receiptId}, checkContext = async () => {}) {
-    if (!uuid.test(receiptId)) throw fail('INVALID', 'invalid')
+    if (!isReceiptId(receiptId)) throw fail('INVALID', 'invalid')
     await checkContext()
     const { root: home, base, archive } = await locations()
     return locked(base, async () => {
@@ -259,5 +285,50 @@ export function createSkillMaintenance({ home = homedir() } = {}) {
       return { restored: true }
     })
   }
-  return { preview, apply, history, undo }
+  async function undoBatch({ workspaceId, batchId }, checkContext = async () => {}) {
+    if (!isBatchId(batchId)) throw fail('INVALID', 'invalid')
+    await checkContext()
+    const { root: home, base, archive } = await locations()
+    return locked(base, async () => {
+      const entries = (await readdir(archive)).filter(id => id.startsWith(batchId + '.') && isReceiptId(id))
+        .sort((a, b) => Number(b.slice(37)) - Number(a.slice(37)))
+      if (!entries.length) throw fail('INVALID', 'invalid')
+      const records = new Map()
+      for (const id of entries) {
+        const row = await loadRecord(home, join(archive, id)).catch(() => null)
+        if (!row) continue
+        if (row.workspaceId !== workspaceId || row.batchId !== batchId) throw fail('INVALID', 'invalid')
+        records.set(id, row)
+      }
+      if (!records.size) throw fail('INVALID', 'invalid')
+      let lostFocus = false
+      const check = async () => {
+        try { await checkContext() }
+        catch (error) { lostFocus = true; throw error }
+      }
+      const rows = []
+      for (const id of entries) {
+        const record = records.get(id)
+        if (!record) {
+          rows.push({ receiptId: id, name: id, status: 'failed', reason: 'unavailable' })
+          continue
+        }
+        const result = { receiptId: record.id, name: record.name, status: 'skipped' }
+        if (record.state !== 'restored') {
+          if (lostFocus) result.reason = 'workspace-changed'
+          else try {
+            await check()
+            await restore(home, join(archive, record.id), record, check)
+            result.status = 'restored'
+          } catch (error) {
+            result.status = lostFocus ? 'skipped' : 'failed'
+            result.reason = lostFocus ? 'workspace-changed' : error.code === 'CONFLICT' ? 'conflict' : 'unavailable'
+          }
+        } else result.reason = 'already-restored'
+        rows.push(result)
+      }
+      return { batchId, rows }
+    })
+  }
+  return { preview, apply, history, undo, undoBatch }
 }

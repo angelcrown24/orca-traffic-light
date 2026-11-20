@@ -17,15 +17,16 @@ const report = (...findings: SkillReviewFinding[]): SkillReviewReport => ({findi
 const duplicate = finding({ kind:'redundant', removalCandidate:{reason:'duplicate',id:copy.id,retainedId:keeper.id},comparisonIds:[copy.id,keeper.id] })
 
 test('select a recommended path, review the draft, save the exact pinned revision, and refresh findings', async () => {
-  const original = '# Report\r\nRead [notes](docs/report.md) or use docs/report.md.old.\r\n'
-  const updated = '# Report\r\nRead [notes](references/report.md) or use docs/report.md.old.\r\n'
+  const original = '# Report\r\nRead [notes](docs/report.md) or keep `docs/report.md`.\r\nSee [more](./docs/report.md#summary).\r\n'
+  const updated = '# Report\r\nRead [notes](references/report.md) or keep `docs/report.md`.\r\nSee [more](./references/report.md#summary).\r\n'
   let saved = false
   const writes: unknown[] = []
   const host = mockHost({ requests:{ ...base,
     'toolbox.skillReview': () => saved ? report() : report(finding({evidence:['docs/report.md'],lines:[2],referenceFixes:[{from:'docs/report.md',to:'references/report.md',line:2}]})),
     'toolbox.previewSkillChange': input => {
       assert.deepEqual(input,{workspaceId,id:copy.id,kind:'edit'})
-      return {status:'ready', name:'report',revision:'pinned',path:'Claude/report/SKILL.md',paths:[],providers:copy.providers,body:original}
+      return {status:'ready', name:'report',revision:'pinned',path:'Claude/report/SKILL.md',paths:[],providers:copy.providers,body:original,
+        referenceFixes:[2,3].map(line => ({from:'docs/report.md',to:'references/report.md',line}))}
     },
     'toolbox.applySkillChange': input => {
       writes.push(input); saved = true
@@ -38,8 +39,10 @@ test('select a recommended path, review the draft, save the exact pinned revisio
     await v.press({type:'ListItem',label:'report'})
     await v.press({text:'지침 수정'})
     assert.ok(v.find({text:'변경 저장'})?.disabled)
+    await v.press(v.findAll({text:'제안 경로 사용'})[0])
+    assert.equal(v.valueOf({label:'수정할 줄 · 2'}),'Read [notes](references/report.md) or keep `docs/report.md`.')
     await v.press({text:'제안 경로 사용'})
-    assert.equal(v.valueOf({label:'수정할 줄 · 2'}),'Read [notes](references/report.md) or use docs/report.md.old.')
+    assert.equal(v.valueOf({label:'수정할 줄 · 3'}),'See [more](./references/report.md#summary).')
     assert.equal(writes.length,0)
     await v.press({text:'변경 저장'})
     assert.deepEqual(writes,[{workspaceId,kind:'edit',id:copy.id,revision:'pinned',body:updated}])

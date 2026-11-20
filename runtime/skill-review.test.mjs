@@ -206,3 +206,22 @@ test('suggests a moved reference only when exactly one same-basename regular pac
   await f.put(root + 'manual/guide.md', 'second candidate')
   assert.equal((await f.review()).findings.find(finding => finding.kind === 'missing').referenceFixes, undefined)
 })
+
+test('retirement requires a real skill-name span outside multiline literals and fenced examples', async t => {
+  const f = await setup(t)
+  const file = '.codex/skills/guide/SKILL.md'
+  const marker = 'Replaced by \x60guide-v2\x60.'
+  const sample = [
+    'A Markdown illustration uses \x60\x60this sentence:', marker, 'End of literal.\x60\x60', '',
+    'For example, use \x60\x60this text:', marker, 'End of literal.\x60\x60', '',
+    '\x60\x60\x60md', marker, '\x60\x60\x60', '',
+    'Use \x60\x60these instructions:', '\x60guide-v2\x60 is the preferred path for new installs.', 'End of literal.\x60\x60'
+  ].join('\n')
+  await f.put('.codex/skills/guide-v2/SKILL.md', skill('guide-v2','Independent instructions.'))
+  await f.put(file, skill('guide', sample))
+  assert.deepEqual((await f.review()).findings, [])
+  await f.put(file, skill('guide', sample + '\n\n  - ' + marker))
+  const result = await f.review()
+  assert.equal(result.findings.length, 1)
+  assert.equal(result.findings[0].removalCandidate.reason,'successor')
+})

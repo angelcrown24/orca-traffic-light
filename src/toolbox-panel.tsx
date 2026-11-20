@@ -3,6 +3,7 @@ import { englishCount, panelLanguage } from './panel-language'
 import { clearAdaptation, limitationLabel, ProviderAdaptation } from './provider-adaptation'
 import type { CatalogItem, SyncResult, ToolboxCatalog, ToolboxState } from './toolbox-types'
 import './protocol'
+import { applyingSkillBatch, receiveBatchProgress } from './skill-batch'
 import { applyingSkillChange } from './skill-maintenance'
 import { SkillReview, checkSkills, resetSkillReview } from './skill-review'
 import type { SkillReviewFinding } from './toolbox-types'
@@ -122,9 +123,10 @@ export function setupToolbox(ctx: PanelContext, tab: Atom<string>): void {
   migrateReviewTab()
   canRead = () => read(ctx.visible) && ['library', 'review', 'structure'].includes(read(tab))
   canReview = () => read(ctx.visible) && read(tab) === 'review'
+  ctx.subscriptions.push(plugin.on('toolbox.skillBatchProgress', receiveBatchProgress))
   ctx.subscriptions.push(plugin.on('toolbox.skillsChanged', () => {
     set(loaded, false)
-    if (canRead() && !applyingSkillChange() && !read(loading)) void openToolbox(true)
+    if (canRead() && !applyingSkillChange() && !applyingSkillBatch() && !read(loading)) void openToolbox(true)
   }))
   ctx.subscriptions.push(plugin.on('toolbox.changed', () => { if (canRead()) void refreshState() }))
   ctx.subscriptions.push(on('workspace.changed', ({ context }) => {

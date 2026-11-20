@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
+import { instructionLines, targetsForLines } from './skill-reference-targets.mjs'
 import { containsInstallation, isUserSkillDirectory } from './maintenance-paths.mjs'
 import { inspectSkillPackage, readSharedRegistry } from './shared-sync.mjs'
 
@@ -19,38 +20,27 @@ function safeRelative(value) {
     /^[\p{L}\p{N}_][\p{L}\p{N}_.-]{0,79}$/u.test(part))
 }
 
-// Fenced documentation examples and output paths are common in skills that teach authors how to build a skill.
 function readInstructions(content) {
-  const references = new Map(), successors = []
-  const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/)
-  let frontmatter = lines[0]?.trim() === '---', fence, exampleDepth = 0
+  const references = new Map(), successors = [], codeStarts = new Map()
+  const lines = instructionLines(content)
+  for (const [line, targets] of targetsForLines(lines, codeStarts)) {
+    for (const { path } of targets) {
+      if (!safeRelative(path)) continue
+      if (!references.has(path)) references.set(path, [])
+      const occurrences = references.get(path)
+      if (occurrences.at(-1) !== line) occurrences.push(line)
+    }
+  }
   for (const [index, line] of lines.entries()) {
-    if (frontmatter) {
-      if (index && /^(?:---|\.\.\.)\s*$/.test(line)) frontmatter = false
-      continue
-    }
-    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
-    if (fence) {
-      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = undefined
-      continue
-    }
-    if (marker) { fence = marker[1]; continue }
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line)
-    if (heading) {
-      if (exampleDepth && heading[1].length <= exampleDepth) exampleDepth = 0
-      if (!exampleDepth && /\bexamples?\b/i.test(heading[2])) exampleDepth = heading[1].length
-    }
-    if (exampleDepth || /^(?: {4}|\t|\s*>)|\b(?:e\.g\.|examples?\b|for instance\b|for illustration\b)/i.test(line)) continue
-    const paths = [...line.matchAll(/\]\((?:\.\/)?([\p{L}\p{N}_.\/-]+\.[\w-]+)(?:#[\w-]+)?\)/gu)].map(match => match[1])
-    // Only explicit instructions to read/run a bundled file qualify. Bare mentions can describe future output.
-    const instruction = /^\s*(?:(?:[-*+] |\d+[.)] ))?(?:read|consult|see|run|execute|invoke)\s+`(?:(?:python3?|bash|sh|node)\s+)?(?:\.\/)?((?:scripts|references|assets|templates)\/[\w./-]+\.[\w-]+)`/gi
-    for (const match of line.matchAll(instruction)) paths.push(match[1])
-    for (const path of paths) if (safeRelative(path) && !references.has(path)) references.set(path, index + 1)
+    if (line === null) continue
     const preferred = /(?:^\s*(?:[-*] )?|\bbut\s+|[.;!]\s+)`([A-Za-z][A-Za-z0-9_.-]{0,95}-v\d{1,3})` is (?:the )?(?:preferred|recommended) (?:path|option|choice|version|skill) for new (?:installs|installations|projects)\b/i.exec(line)
     const replacement = /^(?:[-*] )?(?:(?:This (?:skill|version) (?:is|was|has been) )?(?:superseded|replaced) by|(?:This skill is )?deprecated[.,:; —-]+use) `([A-Za-z][A-Za-z0-9_.-]{0,95}-v\d{1,3})`(?: instead)?[.!\s]*$/i.exec(line.trim())
-    const target = preferred?.[1] ?? replacement?.[1]
-    if (target) {
-      const name = target.toLowerCase()
+    const match = preferred ?? replacement
+    if (match) {
+      const indent = preferred ? 0 : line.length - line.trimStart().length
+      const opening = indent + match.index + match[0].indexOf('\x60')
+      if (!codeStarts.get(index + 1)?.has(opening)) continue
+      const name = match[1].toLowerCase()
       const existing = successors.find(row => row.name === name)
       if (!existing) successors.push({ name, line: index + 1, replaced: Boolean(replacement) })
       else if (replacement && !existing.replaced) Object.assign(existing, { line: index + 1, replaced: true })
@@ -63,7 +53,7 @@ async function missingReferences(root, entries, references) {
   const byPath = new Map(entries.map(entry => [entry.path.split(sep).join('/'), entry.kind]))
   const links = entries.filter(entry => entry.kind === 'link').map(entry => entry.path.split(sep).join('/'))
   const missing = []
-  for (const [path, line] of references) {
+  for (const [path, lines] of references) {
     if (byPath.get(path) === 'file') continue
     if (links.some(link => path === link || path.startsWith(link + '/'))) {
       try {
@@ -74,7 +64,7 @@ async function missingReferences(root, entries, references) {
         if (!['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) throw error
       }
     }
-    missing.push({ path, line })
+    missing.push({ path, line: lines[0], lines })
   }
   if (missing.length) {
     const singlePath = new Map()
@@ -93,9 +83,11 @@ async function missingReferences(root, entries, references) {
 
 export async function currentReferenceFixes(root, entries, body) {
   const missing = await missingReferences(root, entries, readInstructions(body).references)
-  return missing.filter(hit => hit.replacement).slice(0, evidenceLimit).map(({path, replacement, line}) => ({
-    from: path, to: replacement, line
-  }))
+  return referenceFixes(missing.filter(hit => hit.replacement).slice(0, evidenceLimit))
+}
+
+function referenceFixes(hits) {
+  return hits.flatMap(hit => hit.lines.map(line => ({ from: hit.path, to: hit.replacement, line })))
 }
 
 function differenceDetails(packages, sourceIds) {
@@ -291,8 +283,7 @@ export function createSkillReviewer({ home = homedir() } = {}) {
         }
         if (missing.length) {
           const row = finding('missing', copies.map(row => row.item), missing.map(hit => hit.path), fingerprint, { lines: missing.map(hit => hit.line) })
-          const fixes = missing.filter(hit => hit.replacement && row.evidence.includes(hit.path))
-            .map(hit => ({ from: hit.path, to: hit.replacement, line: hit.line }))
+          const fixes = referenceFixes(missing.filter(hit => hit.replacement && row.evidence.includes(hit.path)))
           findings.push(fixes.length ? { ...row, referenceFixes: fixes } : row)
         }
         const source = copies[0].item.name.toLowerCase()
