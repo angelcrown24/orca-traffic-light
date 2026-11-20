@@ -1,5 +1,9 @@
 # Release history
 
+## [v0.12.2](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.12.2) · Keep reviews responsive while saving
+
+- Review waits for a pending Library change before enabling a fresh scan. A quick switch between tabs can no longer leave the workspace controls stuck in a saving state.
+
 ## [v0.12.1](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.12.1) · One-click skill review
 
 - Open **Review** directly after **Library**. Select any finding to see its evidence and suggested action immediately, including on machines without a local AI model.

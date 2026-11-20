@@ -1,5 +1,6 @@
 import { assert, mockHost, mount, test } from 'orca/testing'
 import * as panel from './panel'
+import { openToolbox } from './toolbox-panel'
 import { panelLanguage } from './panel-language'
 import type { ToolboxCatalog, ToolboxState } from './toolbox-types'
 
@@ -466,4 +467,38 @@ test('late workspace state reads cannot replace a newer selection', async () => 
     await view.rerender()
     assert.equal(view.valueOf({ label: 'design-guide' }), true)
   } finally { await view.unmount() }
+})
+
+
+test('a review refresh during a pending library save keeps the saved selection usable', async () => {
+  let current = initial()
+  let scans = 0
+  let start!: () => void, finish!: () => void
+  const started = new Promise<void>(resolve => { start = resolve })
+  const pending = new Promise<void>(resolve => { finish = resolve })
+  const host = mockHost({ requests: {
+    'calls.get': calls,
+    'toolbox.catalog': () => { scans++; return catalog },
+    'toolbox.state': () => current,
+    'toolbox.select': async input => {
+      start()
+      await pending
+      current = { ...current, selected: input.ids }
+      return current
+    }
+  } })
+  const view = await mount(panel, { host })
+  try {
+    await view.select({ label: 'Traffic Light views' }, 'library')
+    const beforeSave = scans
+    const saving = view.toggle({ label: 'design-guide' })
+    await started
+    await openToolbox(true)
+    assert.equal(scans, beforeSave)
+    finish()
+    await saving
+    assert.equal(view.valueOf({ label: 'design-guide' }), true)
+    assert.equal(view.find({ label: 'figma-local' })?.disabled, false)
+    assert.deepEqual(view.errors, [])
+  } finally { finish(); await view.unmount() }
 })

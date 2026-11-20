@@ -80,7 +80,7 @@ const copy = {
 const text = () => copy[panelLanguage(env.locale)]
 
 export async function openToolbox(force = false): Promise<void> {
-  if (!canRead()) return
+  if (!canRead() || (force && read(busy))) return
   if (!force && read(loaded)) {
     await refreshState()
     if (canReview()) await checkSkills(read(state).workspaceId)
@@ -336,20 +336,19 @@ export function ToolboxReviewPanel({ onOpenLibrary }: { onOpenLibrary: () => voi
     if (!group) throw new Error('review-source-changed')
     set(catalog, library)
     onOpenLibrary()
-    if (needsImport(group)) {
-      changeView('import')
-      set(kind, 'skill'); set(query, group.name); set(reviewedGroup, group.key)
+    const importing = needsImport(group)
+    changeView(importing ? 'import' : 'store')
+    set(kind, 'skill'); set(query, group.name); set(reviewedGroup, group.key)
+    if (importing) {
       if (finding.kind === 'update' && finding.ids.length === 1 && finding.reviewedSourceStamp) {
         reviewedUpdate = { workspaceId, itemId: finding.ids[0], stamp: finding.reviewedSourceStamp }
       }
       await openImportDetails(group)
     } else {
-      changeView('store')
-      set(kind, 'skill'); set(query, group.name); set(reviewedGroup, group.key)
       set(expandedItem, group.items.find(item => finding.ids.includes(item.id))?.id ?? null)
     }
   }
-  return <SkillReview onCheck={() => openToolbox(true)} refreshing={read(loading)} loadFailed={read(failure) === 'load'}
+  return <SkillReview onCheck={() => openToolbox(true)} refreshing={read(loading) || read(busy)} loadFailed={read(failure) === 'load'}
     workspaceId={current.workspaceId} items={items} selected={current.selected} openSource={showSource} canOpen={finding => !!reviewGroup(finding)} />
 }
 
