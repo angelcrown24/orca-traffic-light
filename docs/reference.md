@@ -28,6 +28,8 @@ Traffic Light checks the selected source for recognized runtime dependencies and
 
 Importing a skill copies its supporting files into a versioned shared snapshot. The path `~/.agents/skills/<name>` points to the current shared version. Missing provider entries can link to it. Existing provider packages and earlier snapshots are preserved. A change in the source appears as an update for explicit synchronization. The importer reports conflicting destinations for review.
 
+To reverse a skill import, open its details under **Library → Shared library** and select **Stop sharing…**. The preview names the original and lists the links and snapshots that will be removed or preserved. New imports record which links Traffic Light created. For older snapshot registrations, the preview identifies matching legacy links for confirmation. Earlier releases sometimes added links to skills already present in the shared folder without recording ownership. Inspect those individual links manually. When the original is missing or an owned snapshot has changed, resolve the problem shown before confirming removal.
+
 Check the skill’s declared requirements against the software and tools available to the consuming agent. Packages with recognized provider-specific controls stay with their native provider. Examples include Claude hooks, forked context, `disable-model-invocation`, and Codex’s explicit-only policy in `agents/openai.yaml`. The importer can check package declarations. Provider policy, local dependencies, and requirements described in free text still depend on the environment. [Agent Skills specification](https://agentskills.io/specification) · [Claude Code skills](https://code.claude.com/docs/en/skills) · [Codex skills](https://developers.openai.com/codex/skills/)
 
 ### MCP servers
@@ -62,7 +64,9 @@ A recommendation preview uses the eligible items in the workspace selection. It 
 
 ## Agent connection
 
-**Connect** installs a managed block in `~/.agents/AGENTS.md` and the launcher at `~/.agents/traffic-light/auto-cli.mjs`. Setup preserves instruction symlinks and installs short bridges in the Codex, Gemini, and Claude user instruction files where needed. Gemini and Antigravity share the `~/.gemini/GEMINI.md` bridge. The plugin backs up existing instructions and reports a conflict if a managed block has been edited. These operations leave provider MCP and authentication settings intact.
+**Connect** presents a global file preview. Confirming installs a managed block in `~/.agents/AGENTS.md` and the launcher at `~/.agents/traffic-light/auto-cli.mjs`. Setup preserves instruction symlinks and installs short bridges in the Codex, Gemini, and Claude user instruction files where needed. Gemini and Antigravity share the `~/.gemini/GEMINI.md` bridge. The plugin backs up existing instructions and reports a conflict if a managed block has been edited. These operations leave provider MCP and authentication settings intact.
+
+**Connection settings → Remove agent instructions** turns off automatic access for every workspace on the machine and removes the managed blocks and launcher. **Turn off** on one workspace revokes just that workspace’s automatic access. Instruction backups remain under `~/.agents/traffic-light/backups/`. For post-uninstall cleanup, see [Uninstall](../README.md#uninstall).
 
 Automatic access follows the caller’s canonical working directory. The closest enabled parent workspace supplies the selection. Each conversation starts its own handle and retains the approved selection for the life of that handle. The plugin restores saved grants after checking their fingerprints. A changed or missing source pauses automatic access until reviewed. An already-running native agent may need a manual guide to discover the launcher. It can use the guide in the same conversation.
 
@@ -89,38 +93,22 @@ The worker observes tool before/after events from agents in local Orca terminals
 
 **Awaiting finish** indicates an observed start. **Finished** indicates the matching end. If a call ID is missing, an end matches only a single pending call with the same terminal, agent, and tool. Ambiguous and unpaired events show **Uncertain**. An unmatched start can remain pending. The **In use** badge for such a terminal call expires after five minutes, which can also expire a very long running call’s badge early. The worker holds up to 100 calls per terminal and 100 recently active terminals in memory.
 
-### Native chats
+### Workspace agent status and native chat coverage
 
-**Activity → Settings & privacy → Show chat activity** enables polling while the Activity tab is visible. Approximately every three seconds, the worker reads `orca worktree ps --environment local --json`. The response can include prompts, inputs, and assistant replies from all workspaces. The panel displays activity for the focused workspace. Disabling the setting stops further reads.
+The optional terminal agent roster uses the public `agents.list` Host API and the focused workspace from `workspace.readContext`. The host supplies terminal associations and states such as working or waiting. Local terminal tool hooks supply call names and lifecycle events. The scope of terminal hooks is documented above.
 
-On macOS the reader also queries Orca’s local chat journal for the focused workspace. It samples up to four local chats, prioritizing running and recently updated sessions. Per chat, it examines up to 300 recent calls and up to 8,192 characters of each tool input for recognizable names. The query excludes chat messages and tool outputs. The internal journal schema can change, and the UI indicates unavailable or truncated history. Native chat coverage depends on the events Orca reports.
-
-The default CLI is `orca` on macOS and `orca-ide` on Linux. On Windows, or for a different installation, set `ORCA_CLI_COMMAND` to the path of a single executable. The status command has a five-second timeout and a four-megabyte output limit.
-
-### Session activity
-
-The selected chat or terminal is the root of the execution tree. Branches open expanded. Select a row for its status and available timing details, or collapse a branch while following other work. Nesting follows the parent links reported by Orca. A settled parent with a running descendant stays visible as **Parent** until that descendant finishes.
-
-While the main agent works, the chat root shows **Working** even between tool calls. On macOS, a verified open turn can show live tools by name from the local chat journal. Repeated concurrent reads or edits with the same tool under one owner share a row with a running count. Shell rows can also show a recognized executable. Identified MCP tools use the server and tool name.
-
-**Recently used tools** shows the three latest distinct tool names from the main chat’s last 30 settled calls in this turn. Expand the remaining names to see more. Counts apply to that window. Select a name for the count and latest outcome. The group clears when the turn ends. The separate **This turn** totals cover the whole open turn. Tool calls include commands. Change records count individual diffs, so several records may refer to one file. The panel omits totals for turns with more than 1,000 tool-call and diff records combined.
-
-Orca can report a shell as the child agent’s current operation. For a Codex child, the panel can also place a running shell call from the local journal under its owner when both the thread and its current turn match. Antigravity’s optional status index supplies direct child relationships and report times.
-
-The monitor follows one chat or terminal in the current Orca workspace instance. On macOS it reads the active profile’s workspace layout in read-only mode and matches the selected tab, split pane and execution host. Where focus information is unavailable, select a local chat or terminal manually. A terminal is checked through `orca terminal show`. **Connected** means its PTY is live. A **Running** shell or background command needs a current tool call or a live command reported by the host. Only recognized program names are displayed. The panel omits arguments, terminal output and arbitrary terminal titles. A process detached without a reported session link falls outside the monitor’s view.
-
-The panel shows subagents whose reported state is **Working** or **Monitoring**, including delegated work that continues after the parent replies. On macOS, **Show Antigravity subagent status** can supplement a missing roster using Antigravity CLI’s local summary index in the default `~/.gemini` account. It verifies the selected workspace, account and conversation handle, then reads up to 12 direct children from the past 24 hours. Working reports older than two minutes drop out of the live list. A delegation call on its own does not establish that a child is still running.
+Native chats can use the shared runner across providers. The runner records its own skill and MCP activity against the workspace grant. The public plugin API currently does not expose the selected native chat pane, a per-turn native tool timeline, or parent/child chat identifiers. Traffic Light has no private database, profile-layout or transcript fallback. See the upstream requests for [native chat events](https://github.com/stablyai/orca/issues/37615) and [focused surface metadata](https://github.com/stablyai/orca/issues/38341).
 
 ### Workspace call history
 
-**Recent tool calls** combines local terminal hooks, sampled native chats and shared MCP calls into one list of the 30 most recent observations in this workspace. Clearing the list saves a workspace-specific cutoff. New calls appear automatically, including after the panel is reopened. Running tasks, detected items and provider history keep their own state.
+**Recent tool calls** combines local terminal hooks and shared runner calls into one list of the 30 most recent observations in this workspace. Clearing the list saves a workspace-specific cutoff. New calls appear automatically, including after the panel is reopened. Running tasks, detected items and provider history keep their own state.
 
-Detection uses call metadata and skill-path references. A detected path shows that a skill was referenced. A completed skill read shows that its instructions reached the caller. Neither establishes how long a model followed the instructions. Brief activity can fall between samples. Native failure reporting depends on the provider. The panel does not measure model context usage or token costs.
+Detection uses call metadata and skill-path references. A detected path shows that a skill was referenced. A completed skill read shows that its instructions reached the caller. Neither establishes how long a model followed the instructions. Brief activity can fall between samples. The panel does not measure model context usage or token costs.
 
 ## Permissions and local data
 
-The plugin uses a trusted worker, workspace read access, its own settings and storage, and Orca’s tool hooks. Import can create shared files and links. Connect can update agent instructions and run selected local server commands with your account’s permissions. Workspace selection controls which capabilities the runner offers. It does not sandbox those commands or other processes running as the same user.
+The plugin uses a trusted worker, workspace and agent read permissions, its own settings and storage, and Orca’s tool hooks. Import can create shared files and links. Connect can update agent instructions and run selected local server commands with your account’s permissions. Workspace selection controls which capabilities the runner offers. It does not sandbox those commands or other processes running as the same user.
 
 Connection secrets live in private files under `~/.agents/traffic-light` with mode `0600` on POSIX. Local gateways check authorization, host, and origin headers. Another running plugin instance cannot take over a live automatic connection. If a process exits abruptly, an expired bundle file can remain, but the stopped gateway can no longer accept its token.
 
-The activity monitor does not persist, log, or transmit the chat contents it inspects. The shared runner returns tool results to the invoking agent. Its bounded panel records contain identifiers, names, timestamps, recommendation links, and status. It does not persist tool arguments, results, or server stderr. Invoked tools may contact their own services and produce their own logs.
+The activity monitor does not read chat transcripts. The shared runner returns tool results to the invoking agent. Its bounded panel records contain identifiers, names, timestamps, recommendation links, and status. It does not persist tool arguments, results, or server stderr. Invoked tools may contact their own services and produce their own logs.

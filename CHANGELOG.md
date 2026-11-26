@@ -1,5 +1,11 @@
 # Release history
 
+## [v0.15.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.15.0) · Reversible sharing and public activity APIs
+
+- Review the instruction paths before connecting. **Remove agent instructions** removes managed blocks and provider bridges from the computer.
+- **Stop sharing** removes Traffic Light’s skill links and snapshots. The README explains how to uninstall and what to do with backups.
+- Activity uses Orca’s public workspace and agent APIs, local terminal hooks and the shared runner. The previous native-chat timeline and automatic selected-pane tracking have been removed.
+
 ## [v0.14.0](https://github.com/angelcrown24/orca-traffic-light/releases/tag/v0.14.0) · Batch actions in Skill Review
 
 - Select multiple findings in Review and confirm the proposed changes together. Supported actions include verified path repairs, duplicate consolidation and removal of explicitly superseded installations.

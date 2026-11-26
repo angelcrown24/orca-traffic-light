@@ -10,59 +10,24 @@ const catalog: ToolboxCatalog = { items: [
 const selection: ToolboxState = { workspaceId: 'demo', selected: ['design', 'figma'], bundle: null, events: [{ id: 'sample-call', bundleId: 'sample-session', name: 'figma-local', kind: 'mcp', state: 'running', startedAt: 1700000000000 }], automation: { enabled: true, setup: true, providers: [{ name: 'Codex', state: 'ready' }, { name: 'Gemini', state: 'ready' }, { name: 'Claude', state: 'ready' }], appliedIds: ['design', 'figma'], sessions: 1 } }
 const requests = {
   'calls.get': () => ({ workspace: true, calls: [] }),
-  'session.shells': () => ({ status: 'disabled' as const, options: [], selected: null, rows: [], subagents: [] }),
+  'activity.terminals': () => ({ status: 'disabled' as const, openTerminals: 0, rows: [] }),
   'toolbox.activity': () => ({ workspaceId: 'demo', recommendations: [], events: [] }),
   'toolbox.catalog': () => catalog,
   'toolbox.state': () => selection,
 }
 export default defineCheck({
   fresh: { requests },
-  antigravityWorking: { settings: { nativeActivity: true }, requests: { ...requests,
-    'session.shells': () => ({ status: 'ready', options: [{ id: 'chat:demo', kind: 'chat', provider: 'antigravity', number: 1 }],
-      selected: 'chat:demo', mainWorking: true, turnActivity: { tools: 13, commands: 1, edits: 3 }, rows: [], subagents: [],
-      turnTools: [
-        { name: 'read_file', count: 6, state: 'completed' }, { name: 'edit_file', count: 2, state: 'completed' },
-        { name: 'search', count: 1, state: 'failed' }, { name: 'execute', count: 1, state: 'completed' },
-      ], tree: [
-        { id: 'active-edit', kind: 'edit', toolName: 'edit_file', state: 'running', children: [] },
-        ...['view-a','view-b'].map(id => ({ id, kind: 'tool' as const, toolName: 'view_file', state: 'running' as const, children: [] })),
-      ] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [] })
+  terminalActivity: { settings: { nativeActivity:true }, requests: { ...requests,
+    'activity.terminals': () => ({ status:'ready', openTerminals:2, rows:[
+      {terminal:1, agent:'codex', state:'working', tools:['exec_command','Read']},
+      {terminal:2, agent:'claude', state:'blocked', tools:[]}
+    ] })
   } },
-  antigravityChild: { settings: { nativeActivity: true, antigravityChildStatus: true }, requests: { ...requests,
-    'session.shells': () => ({ status: 'ready', options: [{ id: 'chat:demo', kind: 'chat', provider: 'Antigravity', number: 1 }], selected: 'chat:demo',
-      rows: [{ kind: 'background', name: 'node', state: 'running' }],
-      subagents: [{ agentType: 'Antigravity', role: 'subagent', state: 'working', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000041 }],
-      tree: [
-        { id: 'provider-child', kind: 'subagent', state: 'working', statusSource: 'antigravity', statusUpdatedAt: 1700000000041, children: [] },
-        { id: 'background-job', kind: 'background', name: 'node', state: 'running', children: [] }
-      ] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [] })
+  terminalUnavailable: { settings: { nativeActivity:true }, requests: { ...requests,
+    'activity.terminals': () => ({status:'partial',openTerminals:1,rows:[{terminal:1,state:'observed',tools:['Read']}]})
   } },
-  jevBadges: { settings: { nativeActivity: true }, requests: { ...requests,
-    'session.shells': () => ({ status: 'ready', options: [{ id: 'chat:demo', kind: 'chat', provider: 'Codex', number: 1 }], selected: 'chat:demo',
-      rows: [{ kind: 'background', name: 'pytest', state: 'running' }],
-      subagents: [
-        { agentType: 'Codex', role: 'subagent', label: 'test_runner', state: 'working', toolName: null },
-        { agentType: 'Codex', role: 'subagent', label: 'reviewer', state: 'working', toolName: null },
-        { agentType: 'Codex', role: 'subagent', label: 'verifier', state: 'monitoring', toolName: null }
-      ],
-      tree: [
-        { id: 'tests', kind: 'subagent', name: 'test_runner', state: 'working', children: [
-          { id: 'test-command', kind: 'background', name: 'pytest', state: 'running', children: [] }
-        ] },
-        { id: 'review', kind: 'subagent', name: 'reviewer', state: 'working', children: [
-          { id: 'verify', kind: 'subagent', name: 'verifier', state: 'monitoring', children: [] }
-        ] }
-      ] }),
-    'native.get': () => ({
-      status: 'ready', journalStatus: 'ready', resources: [{ category: 'plugin', name: 'design-tools', evidence: 'observed' }],
-      activities: [
-        { agentType: 'Codex', state: 'working', toolName: 'shell' },
-        { agentType: 'Antigravity', state: 'done', toolName: null },
-      ],
-      recentTools: [{ id: 'file-read', name: 'read_file', agentType: 'Antigravity', observedAt: 1700000000041, state: 'completed' }]
-    }),
+  jevBadges: { settings: { nativeActivity:true }, requests: { ...requests,
+    'activity.terminals': () => ({status:'ready',openTerminals:1,rows:[{terminal:1,agent:'codex',state:'working',tools:['Read']}] }),
     'toolbox.activity': () => ({
     workspaceId: 'demo',
     recommendations: [

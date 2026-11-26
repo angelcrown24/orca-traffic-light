@@ -186,3 +186,53 @@ test('keeps newest detected names across terminals when the workspace resource l
     }
   } finally { await worker.deactivate() }
 })
+
+test('reports live terminal agents and observed tools only from the focused workspace via the public host API', async () => {
+  const context = { workspaceId: 'one', branch: '', displayName: 'Workspace', terminals: [{ id: 't1', title: 'sensitive title' }, { id: 't2' }] }
+  const row = { terminalId: 't1', agent: 'codex', state: 'working', stateStartedAt: 10, title: 'sensitive title', task: { title: 'sensitive task' } }
+  const host = mockHost({ settings: { nativeActivity: true }, results: { 'workspace.readContext': context, 'agents.list': { agents: [
+    row, { ...row, terminalId:'elsewhere', agent:'unrelated' }, { ...row, terminalId:null, agent:'unowned' }
+  ] } } })
+  const worker = await mountWorker(main, { host })
+  try {
+    await worker.hooks.fire('agent.tool.before', { agent:'codex', workspaceId:null, terminalId:'t1', tool:'Read', input:'sensitive prompt' })
+    const snapshot = await worker.request('activity.terminals')
+    assert.deepEqual(snapshot, { status:'ready', openTerminals:2, rows:[{ terminal:1, agent:'codex', state:'working', tools:['Read'] }] })
+    assert.deepEqual(host.callsOf('agents.list'), [{ workspaceId:'one' }])
+    assert.equal(JSON.stringify(snapshot).includes('sensitive'), false)
+    host.respond('workspace.readContext', {...context, workspaceId:'two', terminals:[{id:'t3'}]})
+    assert.deepEqual(await worker.request('activity.terminals'), { status:'ready', openTerminals:1, rows:[] })
+  } finally { await worker.deactivate() }
+})
+
+test('disabled monitoring never queries the agent roster; observed calls remain available if agent status cannot be read', async () => {
+  const context = { workspaceId:'one', branch:'', displayName:'Workspace', terminals:[{ id:'t1' }] }
+  for (const enabled of [false,true]) {
+    const host = mockHost({ settings:{nativeActivity:enabled}, results:{'workspace.readContext':context, 'agents.list':() => {throw Error('unavailable')} } })
+    const worker = await mountWorker(main,{host})
+    try {
+      await worker.hooks.fire('agent.tool.before',{agent:'claude',workspaceId:null,terminalId:'t1',tool:'Bash',input:'never display arguments'})
+      const snapshot = await worker.request('activity.terminals')
+      if (!enabled) {
+        assert.deepEqual(snapshot,{status:'disabled',openTerminals:0,rows:[]})
+        assert.equal(host.callsOf('agents.list').length,0)
+      } else assert.deepEqual(snapshot,{status:'partial',openTerminals:1,rows:[{terminal:1,state:'observed',tools:['Bash']}]})
+    } finally { await worker.deactivate() }
+  }
+})
+
+test('filters command arguments from terminal tool labels and preserves a verified MCP identity', async () => {
+  const context = { workspaceId:'one', branch:'', displayName:'Workspace', terminals:[{id:'t1'}] }
+  const host = mockHost({settings:{nativeActivity:true}, results:{'workspace.readContext':context, 'agents.list':{agents:[]}}})
+  const worker = await mountWorker(main,{host})
+  try {
+    const base = {workspaceId:null,terminalId:'t1',agent:'codex',input:null}
+    await worker.hooks.fire('agent.tool.before',{...base,tool:'Running view_file /private/file'})
+    await worker.hooks.fire('agent.tool.before',{...base,tool:'Execute',input:{ServerName:'docs',ToolName:'search',other:'private text'}})
+    const { rows } = await worker.request('activity.terminals')
+    assert.deepEqual(rows[0].tools,['view_file','docs/search'])
+    const {calls} = await worker.request('calls.get')
+    assert.deepEqual(calls.map(c=>c.tool),['docs/search','view_file'])
+    assert.equal(JSON.stringify(calls).includes('/private'),false)
+  } finally { await worker.deactivate() }
+})

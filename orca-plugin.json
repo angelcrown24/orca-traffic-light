@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "traffic-light",
   "name": "Traffic Light",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Observe agent activity, sync shared capabilities, and connect agents on demand.",
   "license": "MIT-0",
   "engines": {
@@ -14,6 +14,9 @@
   "capabilities": [
     {
       "kind": "workspace:read"
+    },
+    {
+      "kind": "agent:read"
     },
     {
       "kind": "settings:own"
@@ -43,15 +46,8 @@
     "settings": [
       {
         "key": "nativeActivity",
-        "title": "Observe current native chat activity",
-        "description": "Reads Orca workspace status, which can include prompts, tool inputs and replies. On macOS it also reads the active tab and recent local tool calls. Session activity shows program names, terminal connections and active subagents.",
-        "type": "boolean",
-        "default": false
-      },
-      {
-        "key": "antigravityChildStatus",
-        "title": "Show Antigravity subagent status",
-        "description": "Requires chat activity monitoring on macOS. Matches a conversation ID to parent and child IDs, reported states and update times in Antigravity’s local status index. Excludes transcripts.",
+        "title": "Show terminal agent status",
+        "description": "Lists agent states in the focused workspace through Orca’s public plugin API. Terminal tool hooks and shared runner calls appear separately in Activity.",
         "type": "boolean",
         "default": false
       }

@@ -1,12 +1,13 @@
 import { atom, Badge, Box, Button, Callout, Checkbox, CodeView, Collapsible, EmptyState, env, Heading, IconButton, Input, on, plugin, read, RelativeTime, Row, Separator, set, Stack, Switch, Text, type Atom, type PanelContext } from 'orca'
 import { englishCount, panelLanguage } from './panel-language'
 import { clearAdaptation, limitationLabel, ProviderAdaptation } from './provider-adaptation'
-import type { CatalogItem, SyncResult, ToolboxCatalog, ToolboxState } from './toolbox-types'
+import type { AgentInstructionPreview, CatalogItem, SyncResult, ToolboxCatalog, ToolboxState } from './toolbox-types'
 import './protocol'
 import { applyingSkillBatch, receiveBatchProgress } from './skill-batch'
 import { applyingSkillChange } from './skill-maintenance'
 import { SkillReview, checkSkills, resetSkillReview } from './skill-review'
 import type { SkillReviewFinding } from './toolbox-types'
+import { resetUnshare, UnshareSkill } from './unshare-skill'
 import { ArchitectureDiagram } from './toolbox-architecture'
 import { alreadyShared, closeImportDetails, resetImportReviews, openImportDetails, ImportRow, isShared, needsImport, sectionTitle, sortImports, sourceGroups, type SourceGroup } from './toolbox-import'
 
@@ -26,6 +27,7 @@ const receipts = atom<SourceGroup[]>([])
 const page = atom(0)
 const expandedItem = atom<string | null>(null)
 const settingsOpen = atom<boolean | null>(null)
+const instructionPrompt = atom<AgentInstructionPreview | 'remove' | null>(null)
 const manualOpen = atom('traffic-light.manual-open', false, { persist: 'workspace' })
 const copyStatus = atom<'idle' | 'copying' | 'copied' | 'failed'>('idle')
 let epoch = 0
@@ -111,7 +113,7 @@ async function refreshState(): Promise<void> {
   } catch { if (request === stateRead && generation === epoch) set(failure, 'state') }
 }
 export function leaveToolboxTab(tab: string) {
-  if (tab === 'library') reviewedUpdate = null
+  if (tab === 'library') { reviewedUpdate = null; set(instructionPrompt, null) }
   if (tab === 'review') { reviewVisit++; resetSkillReview() }
 }
 export function setupToolbox(ctx: PanelContext, tab: Atom<string>): void {
@@ -133,14 +135,15 @@ export function setupToolbox(ctx: PanelContext, tab: Atom<string>): void {
     migrateReviewTab()
     if (context?.workspaceId && context.workspaceId === read(state).workspaceId) return
     epoch++
+    resetUnshare()
     reviewedUpdate = null
     resetSkillReview()
     set(loaded, false); set(catalog, { items: [], warnings: [] }); set(reviewedGroup, null)
     set(state, { workspaceId: null, selected: [], bundle: null, events: [] })
-    set(busy, false); set(loading, false); set(failure, ''); set(copyStatus, 'idle'); set(syncResults, []); set(query, ''); set(selectedOnly, false); set(kind, 'all'); set(receipts, []); resetImportReviews(); set(page, 0); set(expandedItem, null); set(settingsOpen, null)
+    set(busy, false); set(loading, false); set(failure, ''); set(copyStatus, 'idle'); set(syncResults, []); set(query, ''); set(selectedOnly, false); set(kind, 'all'); set(receipts, []); resetImportReviews(); set(page, 0); set(expandedItem, null); set(settingsOpen, null); set(instructionPrompt, null)
     if (canRead()) void openToolbox()
   }))
-  ctx.subscriptions.push({ dispose: () => { epoch++; reviewedUpdate = null; canRead = () => false; canReview = () => false; resetSkillReview() } })
+  ctx.subscriptions.push({ dispose: () => { epoch++; set(instructionPrompt, null); reviewedUpdate = null; canRead = () => false; canReview = () => false; resetSkillReview(); resetUnshare() } })
   if (canRead()) void openToolbox()
 }
 function LoadFailure() {
@@ -154,7 +157,7 @@ async function changeSelection(ids: string[]): Promise<void> {
   const workspaceId = read(state).workspaceId
   if (!workspaceId || read(busy) || read(loading)) return
   const request = ++epoch
-  set(busy, true); set(failure, ''); set(copyStatus, 'idle')
+  set(instructionPrompt, null); set(busy, true); set(failure, ''); set(copyStatus, 'idle')
   try {
     const next = await plugin.request('toolbox.select', { ids, workspaceId })
     if (request === epoch) set(state, next)
@@ -184,13 +187,19 @@ async function copyInstructions(): Promise<void> {
     if (request === epoch) set(copyStatus, result.copied ? 'copied' : 'failed')
   } catch { if (request === epoch) set(copyStatus, 'failed') }
 }
-async function changeAutomation(enabled: boolean): Promise<void> {
+async function changeAutomation(enabled: boolean, instructionRevision?: string): Promise<void> {
   const current = read(state)
   if (!current.workspaceId || read(busy) || read(loading)) return
   const request = ++epoch
   set(busy, true); set(failure, ''); set(copyStatus, 'idle')
   try {
-    const next = await plugin.request('toolbox.automation', { workspaceId: current.workspaceId, enabled })
+    if (enabled && !instructionRevision && (!current.automation?.setup || current.automation.needsUpdate)) {
+      const preview = await plugin.request('toolbox.previewAgentInstructions', { workspaceId: current.workspaceId })
+      if (request === epoch) set(instructionPrompt, preview)
+      return
+    }
+    set(instructionPrompt, null)
+    const next = await plugin.request('toolbox.automation', { workspaceId: current.workspaceId, enabled, ...(instructionRevision ? {instructionRevision} : {}) })
     if (request === epoch) set(state, next)
   } catch {
     if (request === epoch) {
@@ -255,7 +264,7 @@ function Item({ item }: { item: CatalogItem }) {
   return <Box direction="column" gap="xs" padding="sm" background={current.selected.includes(item.id) ? 'muted' : 'none'}>
     <Row align="center" justify="between" gap="xs">
       <Box grow minWidth={0}><Checkbox label={item.name} checked={current.selected.includes(item.id)} disabled={!current.workspaceId || read(busy) || (!current.selected.includes(item.id) && (!item.available || !!item.providerOnly || current.selected.length >= 24))} onChange={checked => changeSelection(checked ? [...current.selected, item.id] : current.selected.filter(id => id !== item.id))} /></Box>
-      <IconButton icon={expanded ? 'collapse' : 'expand'} label={`${t.detailsFor}: ${item.name}`} tooltip={t.details} variant="ghost" size="sm" onPress={() => { clearAdaptation(); set(expandedItem, expanded ? null : item.id) }} />
+      <IconButton icon={expanded ? 'collapse' : 'expand'} label={`${t.detailsFor}: ${item.name}`} tooltip={t.details} variant="ghost" size="sm" onPress={() => { clearAdaptation(); resetUnshare(); set(expandedItem, expanded ? null : item.id) }} />
     </Row>
     <Row justify="between" align="center" gap="xs">
       <Box grow minWidth={0}><Text muted size="xs" truncate>{`${item.kind === 'skill' ? t.skill : 'MCP'} · ${source}`}</Text></Box>
@@ -266,6 +275,9 @@ function Item({ item }: { item: CatalogItem }) {
       <Text muted size="xs">{`${t.foundIn}: ${item.providers.join(' · ')}`}</Text>
       <Text muted size="xs">{`${t.source}: ${item.source}`}</Text>
       {item.skillRequirements && !item.providerOnly ? <Text size="xs" muted>{(t === copy.ko ? '필요 환경 · ' : 'Requires · ') + item.skillRequirements}</Text> : null}
+      {item.kind === 'skill' && item.sharing?.unshareKey && current.workspaceId ? <UnshareSkill
+        workspaceId={current.workspaceId} skillKey={item.sharing.unshareKey} disabled={read(busy) || read(loading)}
+        onRemoved={async () => { set(expandedItem,null); await openToolbox(true) }} /> : null}
       {item.providerOnly ? <ProviderAdaptation item={item} workspaceId={current.workspaceId} disabled={read(busy)} /> : <Stack gap="xs">
         {item.reason ? <Text size="sm" tone="warning">{item.reason}</Text> : null}
         {item.sharing?.detail ? <Text size="sm" muted>{item.sharing.detail}</Text> : null}
@@ -292,6 +304,39 @@ function ManualSetup() {
     </Box> : null}
   </Stack></Collapsible>
 }
+async function removeAgentInstructions(): Promise<void> {
+  const workspaceId = read(state).workspaceId
+  if (!workspaceId || read(instructionPrompt) !== 'remove' || read(busy)) return
+  const request = ++epoch
+  set(instructionPrompt, null); set(busy, true); set(failure, '')
+  try {
+    const next = await plugin.request('toolbox.removeAgentInstructions', {workspaceId})
+    if (request === epoch) set(state, next)
+  } catch {
+    if (request === epoch) { set(busy, false); set(failure, 'automation'); await refreshState() }
+  } finally { if (request === epoch) set(busy, false) }
+}
+function InstructionPrompt() {
+  const plan = read(instructionPrompt)
+  if (!plan) return null
+  const ko = text() === copy.ko
+  const removing = plan === 'remove'
+  return <Callout tone={removing ? 'warning' : 'neutral'}><Stack gap="sm">
+    <Text weight="semibold">{removing ? (ko ? '이 기기에서 에이전트 지침을 제거할까요?' : 'Remove agent instructions from this machine?')
+      : (ko ? '에이전트 지침 파일 확인' : 'Review agent instruction files')}</Text>
+    <Text size="sm">{removing ? (ko ? '모든 작업공간의 자동 접근을 끄고 Traffic Light가 설치한 지침 블록과 실행기를 제거합니다.' : 'This turns off automatic access for all workspaces and removes the instruction blocks and launcher installed by Traffic Light.')
+      : (ko ? '이 기기의 다음 파일에 Traffic Light 지침을 추가하거나 업데이트합니다. 화살표는 기존 심볼릭 링크가 가리키는 실제 파일입니다.' : 'Traffic Light will add or update its instructions in these files on this machine. An arrow shows the destination of an existing symbolic link.')}</Text>
+    {!removing ? <Stack gap="xs">
+      <CodeView label={ko ? '지침 파일' : 'Instruction files'} code={plan.files.map(f => f.path === f.target ? f.path : f.path + ' → ' + f.target).join('\n')} wrap maxHeight="md" />
+      <Text size="xs" muted>{ko ? '~/.agents/traffic-light/에 실행기(auto-cli.mjs), 설치 기록(bootstrap.json), 지침 백업과 로컬 연결 정보를 저장합니다.' : 'The launcher (auto-cli.mjs), installation record (bootstrap.json), instruction backups and local connection files are stored in ~/.agents/traffic-light/.'}</Text>
+    </Stack> : null}
+    <Row wrap gap="xs">
+      <Button size="sm" tone={removing ? 'danger' : 'accent'} disabled={read(busy)} onPress={() => removing ? removeAgentInstructions() : changeAutomation(true, plan.revision)}>
+        {removing ? (ko ? '이 기기에서 제거' : 'Remove from this machine') : (ko ? '지침 설치 후 연결' : 'Install instructions and connect')}</Button>
+      <Button size="sm" variant="ghost" onPress={() => set(instructionPrompt, null)}>{ko ? '취소' : 'Cancel'}</Button>
+    </Row>
+  </Stack></Callout>
+}
 function ConnectionSettings() {
   const t = text(), current = read(state), automation = current.automation
   return <Stack gap="sm">
@@ -302,6 +347,10 @@ function ConnectionSettings() {
       {automation.providers.map(provider => <Stack key={provider.name} gap="xs"><Row justify="between" gap="sm" wrap><Text size="sm">{provider.name}</Text><Badge tone={provider.state === 'ready' ? 'success' : 'neutral'}>{provider.state === 'ready' ? t.bridgeReady : t.bridgeMissing}</Badge></Row>{provider.detail ? <Text muted size="xs">{provider.detail}</Text> : null}</Stack>)}
       <Text muted size="xs">{`${t.sessionCount}: ${automation.sessions}`}</Text>
     </Stack></Collapsible> : null}
+    {automation?.managed || automation?.setup ? <Row gap="xs" wrap>
+      {automation.needsUpdate && current.selected.length ? <Button size="sm" variant="outline" disabled={read(busy)} onPress={() => changeAutomation(true)}>{t === copy.ko ? '연결 지침 업데이트' : 'Update agent instructions'}</Button> : null}
+      <Button size="sm" variant="outline" disabled={read(busy)} onPress={() => set(instructionPrompt, 'remove')}>{t === copy.ko ? '에이전트 지침 제거' : 'Remove agent instructions'}</Button>
+    </Row> : null}
     <ManualSetup />
     <Collapsible title={t.connectionDetails}><Stack gap="sm"><Text size="xs" muted>{t.selectionHelp}</Text><Text size="xs" muted>{t.syncHelp}</Text><Text size="xs" muted>{t.metadata}</Text><Text size="xs" muted>{t.tokenHelp}</Text></Stack></Collapsible>
     {read(catalog).warnings.length ? <Collapsible title={`${t.warnings} · ${read(catalog).warnings.length}`}><Stack gap="xs">{read(catalog).warnings.map((note, i) => <Text key={i} size="sm">{note}</Text>)}</Stack></Collapsible> : null}
@@ -314,6 +363,7 @@ function ConnectionSettings() {
   </Stack>
 }
 function changeView(value: 'store' | 'import') {
+  resetUnshare()
   reviewedUpdate = null
   set(reviewedGroup, null); set(libraryMode, value); set(page, 0); set(kind, 'all'); set(query, ''); set(selectedOnly, false)
   set(expandedItem, null); set(receipts, []); set(syncResults, []); closeImportDetails()
@@ -400,6 +450,7 @@ export function ToolboxPanel() {
       <Text size="sm">{ko ? '선택한 항목 중 설치본을 찾을 수 없는 항목 ' + missingSelections.length + '개' : englishCount(missingSelections.length, 'selected item') + ' missing from the library'}</Text>
       <Row><Button size="sm" variant="outline" disabled={read(busy)} onPress={() => changeSelection(current.selected.filter(id => presentIds.has(id)))}>{ko ? '누락된 선택 해제' : 'Remove unavailable selections'}</Button></Row>
     </Stack></Callout> : null}
+    <InstructionPrompt />
     {showSettings ? <Box direction="column" gap="sm" padding="sm" border radius="sm"><Text weight="semibold" size="sm">{t.settings}</Text><ConnectionSettings /></Box> : null}
     <Row gap="xs" wrap>
       <Button size="sm" icon={importing ? 'blocks' : 'check'} variant={importing ? 'ghost' : 'solid'} tone={importing ? 'neutral' : 'accent'} onPress={() => { if (importing) changeView('store') }}>{(ko ? '공용 보관함 ' : 'Shared library ') + store.length}</Button>

@@ -8,7 +8,7 @@ import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { recommendCapabilities } from './skill-recommend.mjs'
 import { createAutomation } from './automation.mjs'
-import { installBootstrap, removeBootstrap, bootstrapStatus } from './bootstrap.mjs'
+import { removeBootstrap } from './bootstrap.mjs'
 
 const fake = `const rl=require('node:readline').createInterface({input:process.stdin});let count=0;rl.on('line',line=>{const q=JSON.parse(line);if(q.id===undefined)return;let result;if(q.method==='initialize')result={protocolVersion:'2025-03-26',capabilities:{tools:{}}};else if(q.method==='tools/list')result={tools:[{name:'counter',inputSchema:{type:'object'}}]};else result={content:[{type:'text',text:String(++count)}]};process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:q.id,result})+'\\n')})`
 const record = { id: 'server', name: 'Fixture MCP', kind: 'mcp' }
@@ -18,6 +18,10 @@ const item = {
   available: true,
   providers: [],
   source: 'fixture'
+}
+async function confirmInstructions(runtime) {
+  const preview = await runtime.previewBootstrap()
+  return runtime.enableBootstrap(preview.revision)
 }
 async function fixture(t, extra = {}) {
   const home = await mkdtemp(join(tmpdir(), 'traffic-auto-'))
@@ -187,7 +191,7 @@ test('bootstrap preserves original bytes and symlinks, creates missing bridge, a
   await writeFile(ssot, original)
   await symlink(ssot, join(home, '.codex', 'AGENTS.md'))
   await symlink(ssot, join(home, '.gemini', 'GEMINI.md'))
-  const result = await runtime.enableBootstrap()
+  const result = await confirmInstructions(runtime)
   assert.equal(result.setup, true)
   assert.ok(result.providers.every((x) => x.state === 'ready'))
   assert.equal((await lstat(join(home, '.codex', 'AGENTS.md'))).isSymbolicLink(), true)
@@ -196,7 +200,7 @@ test('bootstrap preserves original bytes and symlinks, creates missing bridge, a
     await readFile(join(home, '.claude', 'CLAUDE.md'), 'utf8'),
     /Read the shared agent instructions/
   )
-  await runtime.enableBootstrap()
+  await confirmInstructions(runtime)
   assert.equal((await readFile(ssot, 'utf8')).split('traffic-light:auto:start').length, 2)
   await writeFile(ssot, (await readFile(ssot, 'utf8')) + '\nUser addition\n')
   await runtime.disableBootstrap()
@@ -207,7 +211,7 @@ test('bootstrap preserves original bytes and symlinks, creates missing bridge, a
 
 test('bootstrap refuses modified managed content without overwriting unrelated instructions', async (t) => {
   const { home, runtime } = await fixture(t)
-  await runtime.enableBootstrap()
+  await confirmInstructions(runtime)
   const path = join(home, '.agents', 'AGENTS.md')
   const edited = (await readFile(path, 'utf8'))
     .replace('Shared capabilities', 'My edit')
@@ -221,7 +225,7 @@ test('bootstrap refuses modified managed content without overwriting unrelated i
 test('stable installed CLI uses cwd and distinct handles without per-session pasted instructions', async (t) => {
   const { home, workspace, other, runtime } = await fixture(t, { rankEnv: { TYPESAFE_BASE_URL: 'https://disabled.invalid' } })
   await grant(runtime, workspace)
-  await runtime.enableBootstrap()
+  await confirmInstructions(runtime)
   const cli = join(home, '.agents', 'traffic-light', 'auto-cli.mjs')
   async function run(args, cwd = workspace, input = '') {
     const p = spawn(process.execPath, [cli, ...args], { cwd, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -404,12 +408,12 @@ test('a remote Jev configuration falls back to bounded keyword matches', async (
   assert.deepEqual((await recommendCapabilities('contrast', candidates, env)).items, [])
 })
 
-test('restoring an enabled workspace upgrades an owned older launcher and preserves user instructions', async t => {
+test('restoring an enabled workspace preserves an older launcher until its file changes are confirmed', async t => {
   const { home, workspace, runtime } = await fixture(t)
   const ssot = join(home, '.agents', 'AGENTS.md'), base = join(home, '.agents', 'traffic-light')
   await mkdir(join(home, '.agents'))
   await writeFile(ssot, 'My instructions')
-  await installBootstrap({ home })
+  await confirmInstructions(runtime)
   const manifestPath = join(base, 'bootstrap.json'), cli = join(base, 'auto-cli.mjs')
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
   const hash = value => createHash('sha256').update(value).digest('hex')
@@ -423,8 +427,62 @@ test('restoring an enabled workspace upgrades an owned older launcher and preser
   manifest.cliHash = hash('old launcher')
   await writeFile(manifestPath, JSON.stringify(manifest))
   await grant(runtime, workspace)
+  assert.equal(await readFile(cli, 'utf8'), 'old launcher')
+  assert.equal(await readFile(ssot, 'utf8'), older)
+  const preview = await runtime.previewBootstrap()
+  await runtime.enableBootstrap(preview.revision)
   assert.match(await readFile(cli, 'utf8'), /recommend "task"/)
   assert.match(await readFile(ssot, 'utf8'), /recommend "short task description"/)
   await removeBootstrap({ home })
   assert.equal(await readFile(ssot, 'utf8'), 'My instructions')
+})
+
+test('preview is read-only, names canonical symlink targets and rejects retargeting before install', async t => {
+  const { home, runtime } = await fixture(t)
+  await mkdir(join(home, '.codex'))
+  const instructions = join(home, 'personal.md'), other = join(home,'other.md')
+  await writeFile(instructions, 'Personal text')
+  await writeFile(other, 'Other text')
+  const logical = join(home,'.codex','AGENTS.md')
+  await symlink(instructions, logical)
+  const preview = await runtime.previewBootstrap()
+  assert.deepEqual(preview.files.map(f => f.path).sort(), ['~/.agents/AGENTS.md','~/.claude/CLAUDE.md','~/.codex/AGENTS.md','~/.gemini/GEMINI.md'].sort())
+  assert.equal(preview.files.find(f => f.path === '~/.codex/AGENTS.md').target, '~/personal.md')
+  await assert.rejects(lstat(join(home,'.agents')), {code:'ENOENT'})
+  await rm(logical)
+  await symlink(other,logical)
+  await assert.rejects(runtime.enableBootstrap(preview.revision), /changed/)
+  assert.equal(await readFile(other,'utf8'),'Other text')
+  await assert.rejects(lstat(join(home,'.agents','AGENTS.md')), {code:'ENOENT'})
+})
+
+test('removal preserves files a user already unconfigured and restores the rest', async t => {
+  const { home, runtime } = await fixture(t)
+  await confirmInstructions(runtime)
+  const codex = join(home,'.codex','AGENTS.md'), gemini = join(home,'.gemini','GEMINI.md')
+  await writeFile(codex, 'Replacement instructions')
+  await rm(gemini)
+  await runtime.disableBootstrap()
+  assert.equal(await readFile(codex, 'utf8'), 'Replacement instructions')
+  await assert.rejects(lstat(join(home,'.agents','AGENTS.md')), {code:'ENOENT'})
+  await assert.rejects(lstat(gemini), {code:'ENOENT'})
+})
+
+test('a broken launcher link keeps global cleanup discoverable without starting a connection', async t => {
+  const { home, runtime } = await fixture(t)
+  await confirmInstructions(runtime)
+  const launcher = join(home, '.agents', 'traffic-light', 'auto-cli.mjs')
+  await rm(launcher)
+  await symlink(join(home, 'missing'), launcher)
+  const status = await runtime.status()
+  assert.equal(status.setup, false)
+  assert.equal(status.managed, true)
+  await assert.rejects(runtime.disableBootstrap(), {code:'BOOTSTRAP_CONFLICT'})
+  assert.ok((await lstat(launcher)).isSymbolicLink())
+})
+
+test('the installer itself refuses an unconfirmed first write', async t => {
+  const { home, runtime } = await fixture(t)
+  await assert.rejects(runtime.enableBootstrap(), /confirm/i)
+  await assert.rejects(lstat(join(home, '.agents')), { code: 'ENOENT' })
 })

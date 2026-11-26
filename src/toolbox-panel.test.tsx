@@ -273,7 +273,9 @@ test('automatic connection changes only after explicit enable or apply', async (
   const host = mockHost({ requests: {
     'calls.get': calls, 'toolbox.catalog': () => catalog, 'toolbox.state': () => current,
     'toolbox.select': input => { current = { ...current, selected: input.ids }; return current },
+    'toolbox.previewAgentInstructions': () => ({ revision: 'reviewed', files: [{path:'~/.agents/AGENTS.md',target:'~/.agents/AGENTS.md'}, {path:'~/.codex/AGENTS.md',target:'~/personal.md'}, {path:'~/.claude/CLAUDE.md',target:'~/.claude/CLAUDE.md'}, {path:'~/.gemini/GEMINI.md',target:'~/.gemini/GEMINI.md'}] }),
     'toolbox.automation': input => {
+      if (!current.automation?.setup) assert.equal(input.instructionRevision, 'reviewed')
       updates.push(input.enabled)
       current = { ...current, automation: { enabled: input.enabled, setup: true, providers: [{ name: 'Codex', state: 'ready' }], sessions: 1, appliedIds: [...current.selected] } }
       return current
@@ -285,6 +287,13 @@ test('automatic connection changes only after explicit enable or apply', async (
     assert.deepEqual(updates, [])
     assert.equal(view.find({ text: 'Prepare use instructions' }), null)
     await view.press({ text: 'Connect' })
+    assert.deepEqual(updates, [])
+    const paths = String(view.find({label:'Instruction files'})?.props.code)
+    for (const path of ['~/.codex/AGENTS.md','~/.agents/AGENTS.md','~/.claude/CLAUDE.md','~/.gemini/GEMINI.md','~/personal.md']) assert.ok(paths.includes(path))
+    await view.press({text:'Cancel'})
+    assert.deepEqual(updates, [])
+    await view.press({text:'Connect'})
+    await view.press({text:'Install instructions and connect'})
     assert.ok(view.find({ type: 'Badge', text: 'Enabled' }))
     assert.equal(view.find({ type: 'Badge', text: 'Enabled · 1' }), null)
     await view.press({ text: 'Import 1' })
@@ -501,4 +510,25 @@ test('a review refresh during a pending library save keeps the saved selection u
     assert.equal(view.find({ label: 'figma-local' })?.disabled, false)
     assert.deepEqual(view.errors, [])
   } finally { finish(); await view.unmount() }
+})
+
+test('removing leftover machine-wide instructions requires a separate confirmation', async () => {
+  let current: ToolboxState = {...initial(), automation:{enabled:false,setup:false, managed:true, providers:[],sessions:0}}
+  let requests = 0
+  const v = await mount(panel,{host:mockHost({requests:{
+    'calls.get':calls, 'toolbox.catalog':()=>catalog, 'toolbox.state':()=>current,
+    'toolbox.removeAgentInstructions':()=>{requests++; current={...current,automation:{enabled:false,setup:false,managed:false,providers:[],sessions:0}};return current}
+  }})})
+  try {
+    await v.select({label:'Traffic Light views'},'library')
+    await v.press({label:'Connection settings'})
+    await v.press({text:'Remove agent instructions'})
+    assert.equal(requests,0)
+    await v.press({text:'Cancel'})
+    assert.equal(requests,0)
+    await v.press({text:'Remove agent instructions'})
+    await v.press({text:'Remove from this machine'})
+    assert.equal(requests,1)
+    assert.equal(v.find({text:'Remove agent instructions'}),null)
+  } finally { await v.unmount() }
 })

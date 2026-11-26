@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createToolboxManager } from './toolbox-manager.mjs'
 
 function fixture(initial = [], options = {}) {
-  let focused = 'a', persisted = initial, setup = false, closed = false, fingerprint = 'first', events, recommendations, failSave = false
+  let focused = 'a', persisted = initial, setup = options.installed ?? initial.length > 0, closed = false, fingerprint = 'first', events, recommendations, failSave = false
   const grants = new Map(), saved = new Map(), revoked = [], shared = []
   const items = ['one', 'two'].map(id => ({ id, kind: 'skill', name: id, providers: ['Codex'], available: true }))
   const manager = createToolboxManager({
@@ -16,10 +16,12 @@ function fixture(initial = [], options = {}) {
       events = onEvent
       recommendations = onRecommendations
       return {
-        enableBootstrap: async () => { await options.bootstrap?.(); setup = true },
+        previewBootstrap: async () => ({files:[], revision:'reviewed'}),
+        disableBootstrap: async () => { setup = false; return {setup, providers:[],workspaces:[]} },
+        enableBootstrap: async revision => { assert.equal(revision,'reviewed'); await options.bootstrap?.(); setup = true },
         grant: async value => { grants.set(value.workspaceId, value) },
         revoke: async id => { grants.delete(id); revoked.push(id) },
-        status: async () => ({ setup, providers: [{ name: 'Codex', state: 'ready' }], workspaces: [...grants.keys()].map(workspaceId => ({ workspaceId, sessions: 1 })) }),
+        status: async () => ({ setup, managed: setup, providers: [{ name: 'Codex', state: 'ready' }], workspaces: [...grants.keys()].map(workspaceId => ({ workspaceId, sessions: 1 })) }),
         close: async () => { closed = true; grants.clear() }
       }
     },
@@ -31,9 +33,9 @@ function fixture(initial = [], options = {}) {
 
 test('automation requires a selection and pins explicit applied scope independently of draft edits', async () => {
   const f = fixture()
-  await assert.rejects(f.manager.setAutomation({ workspaceId: 'a', enabled: true }), /Select/)
+  await assert.rejects(f.manager.setAutomation({ workspaceId: 'a', enabled: true, instructionRevision: 'reviewed' }), /Select/)
   await f.manager.select({ workspaceId: 'a', ids: ['one'] })
-  const state = await f.manager.setAutomation({ workspaceId: 'a', enabled: true })
+  const state = await f.manager.setAutomation({ workspaceId: 'a', enabled: true, instructionRevision: 'reviewed' })
   assert.equal(state.automation.enabled, true)
   assert.equal(state.automation.setup, true)
   assert.deepEqual(state.automation.appliedIds, ['one'])
@@ -42,7 +44,7 @@ test('automation requires a selection and pins explicit applied scope independen
   await f.manager.select({ workspaceId: 'a', ids: ['two'] })
   assert.deepEqual((await f.manager.state()).automation.appliedIds, ['one'])
   assert.equal(f.grants.get('a').records[0].id, 'one')
-  await f.manager.setAutomation({ workspaceId: 'a', enabled: true })
+  await f.manager.setAutomation({ workspaceId: 'a', enabled: true, instructionRevision: 'reviewed' })
   assert.equal(f.grants.get('a').records[0].id, 'two')
   await f.manager.setAutomation({ workspaceId: 'a', enabled: false })
   assert.equal((await f.manager.state()).automation.enabled, false)
@@ -61,7 +63,7 @@ test('restoration checks pinned source fingerprints and never grants changed sou
   assert.match(state.automation.error, /changed/)
   assert.equal(f.grants.size, 0)
   await f.manager.select({ workspaceId: 'a', ids: ['one'] })
-  await f.manager.setAutomation({ workspaceId: 'a', enabled: true })
+  await f.manager.setAutomation({ workspaceId: 'a', enabled: true, instructionRevision: 'reviewed' })
   assert.equal(f.grants.size, 1)
   assert.equal((await f.manager.state()).automation.error, undefined)
   await f.manager.dispose()
@@ -103,7 +105,7 @@ test('Activity deduplicates recent Jev results and preserves linked use across u
 test('sync remaps only draft selections and refuses stale workspace requests', async () => {
   const f = fixture()
   await f.manager.select({ workspaceId: 'a', ids: ['one'] })
-  await f.manager.setAutomation({ workspaceId: 'a', enabled: true })
+  await f.manager.setAutomation({ workspaceId: 'a', enabled: true, instructionRevision: 'reviewed' })
   await f.manager.sync({ workspaceId: 'a', ids: ['one'] })
   const state = await f.manager.state()
   assert.deepEqual(state.selected, ['two'])
@@ -118,10 +120,10 @@ test('sync remaps only draft selections and refuses stale workspace requests', a
 test('a failed settings save leaves the previous grant and its running sessions intact', async () => {
   const f = fixture()
   await f.manager.select({ workspaceId: 'a', ids: ['one'] })
-  await f.manager.setAutomation({ workspaceId: 'a', enabled: true })
+  await f.manager.setAutomation({ workspaceId: 'a', enabled: true, instructionRevision: 'reviewed' })
   await f.manager.select({ workspaceId: 'a', ids: ['two'] })
   f.failSave()
-  await assert.rejects(f.manager.setAutomation({ workspaceId: 'a', enabled: true }), /Storage unavailable/)
+  await assert.rejects(f.manager.setAutomation({ workspaceId: 'a', enabled: true, instructionRevision: 'reviewed' }), /Storage unavailable/)
   assert.deepEqual(f.revoked, [])
   assert.equal(f.grants.get('a').records[0].id, 'one')
   const state = await f.manager.state()
@@ -137,7 +139,7 @@ test('selection changes wait for an in-flight apply, keeping its records and sea
   const gate = new Promise(resolve => { release = resolve })
   const f = fixture([], { bootstrap: async () => { enter(); await gate } })
   await f.manager.select({ workspaceId: 'a', ids: ['one'] })
-  const applying = f.manager.setAutomation({ workspaceId: 'a', enabled: true })
+  const applying = f.manager.setAutomation({ workspaceId: 'a', enabled: true, instructionRevision: 'reviewed' })
   await entered
   const selecting = f.manager.select({ workspaceId: 'a', ids: ['two'] })
   release()
@@ -176,4 +178,33 @@ test('sync waits out an older inventory scan and returns the newly published cat
   assert.deepEqual(result.catalog.items.map(item => item.id), ['two'])
   assert.deepEqual((await manager.state()).selected, ['two'])
   await manager.dispose()
+})
+
+test('first connect cannot install or grant before confirmation, and removal revokes every workspace', async () => {
+  const f = fixture()
+  await f.manager.select({workspaceId:'a', ids:['one']})
+  await assert.rejects(f.manager.setAutomation({workspaceId:'a',enabled:true}), /confirm/i)
+  assert.deepEqual(f.persisted(), [])
+  assert.equal(f.grants.size, 0)
+  const plan = await f.manager.previewAgentInstructions({workspaceId:'a'})
+  await f.manager.setAutomation({workspaceId:'a',enabled:true,instructionRevision:plan.revision})
+  f.focus('b')
+  await f.manager.select({workspaceId:'b',ids:['two']})
+  await f.manager.setAutomation({workspaceId:'b',enabled:true})
+  assert.equal(f.grants.size, 2)
+  await assert.rejects(f.manager.removeAgentInstructions({workspaceId:'a'}), /Workspace changed/)
+  assert.equal(f.grants.size, 2)
+  await f.manager.removeAgentInstructions({workspaceId:'b'})
+  assert.deepEqual(f.persisted(), [])
+  assert.equal(f.grants.size,0)
+  assert.equal((await f.manager.state()).automation.setup,false)
+  await f.manager.dispose()
+})
+
+test('global instructions remain discoverable after restart with all workspaces off', async () => {
+  const f=fixture([], {installed:true})
+  assert.equal((await f.manager.state()).automation.managed, true)
+  await f.manager.removeAgentInstructions({workspaceId:'a'})
+  assert.equal((await f.manager.state()).automation.managed,false)
+  await f.manager.dispose()
 })

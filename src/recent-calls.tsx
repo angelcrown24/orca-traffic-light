@@ -1,23 +1,20 @@
 import { atom, Badge, Box, Button, Collapsible, env, read, RelativeTime, Row, set, Stack, Text } from 'orca'
-import type { NativeToolCall } from './native-reader'
 import { panelLanguage } from './panel-language'
 import type { Call } from './protocol'
 import type { ToolboxEvent } from './toolbox-types'
 
-type Sources = { terminal: Call[]; native: NativeToolCall[]; shared: ToolboxEvent[] }
+type Sources = { terminal: Call[]; shared: ToolboxEvent[] }
 type Source = keyof Sources
-type CallState = Call['state'] | NativeToolCall['state'] | 'awaiting'
+type CallState = Call['state'] | 'completed' | 'failed' | 'awaiting'
 type Entry = { key: string; source: Source; at: number; name: string; agent?: string | null; state: CallState; jev?: boolean }
 type ClearPoint = { at: number; seen: Record<string, number> }
 const cleared = atom<ClearPoint | null>('traffic-light.recent-cleared', null, { persist: 'workspace' })
 const limit = 30
 
-function entries({ terminal, native, shared }: Sources): Entry[] {
+function entries({ terminal, shared }: Sources): Entry[] {
   return [
     ...terminal.map((c): Entry => ({ key: 'terminal/' + c.id, source: 'terminal', at: c.startedAt ?? 0,
       name: c.tool, agent: c.agent, state: c.state === 'running' ? 'awaiting' : c.state })),
-    ...native.map((c): Entry => ({ key: 'native/' + c.id, source: 'native', at: c.observedAt,
-      name: c.name, agent: c.agentType, state: c.state })),
     ...shared.filter(c => c.operation === 'call').map((c): Entry => ({
       key: 'shared/' + c.bundleId + '/' + c.id, source: 'shared', at: c.startedAt,
       name: c.name, state: c.state === 'succeeded' ? 'completed' : c.state, jev: Boolean(c.recommendationId) }))
@@ -38,12 +35,12 @@ function markCleared(all: Entry[]) {
 const labels = {
   en: {
     title: 'Recent tool calls', clear: 'Clear list', clearHint: 'Clear the displayed history for this workspace', empty: 'No recent tool calls.', loading: 'Loading activity…',
-    workspace: 'Open a workspace to see activity.', terminal: 'Terminal', native: 'Native chat', shared: 'Shared runner',
+    workspace: 'Open a workspace to see activity.', terminal: 'Terminal', shared: 'Shared runner',
     running: 'Running', awaiting: 'Awaiting finish', finished: 'Finished', uncertain: 'Uncertain', completed: 'Completed', failed: 'Failed', unknown: 'Unverified'
   },
   ko: {
     title: '최근 도구 호출', clear: '목록 비우기', clearHint: '이 작업공간의 표시 기록 비우기', empty: '최근 도구 호출이 없습니다.', loading: '활동 불러오는 중…',
-    workspace: '작업공간을 열면 활동이 표시됩니다.', terminal: '터미널', native: '네이티브 채팅', shared: '공용 실행기',
+    workspace: '작업공간을 열면 활동이 표시됩니다.', terminal: '터미널', shared: '공용 실행기',
     running: '실행 중', awaiting: '종료 대기', finished: '종료됨', uncertain: '불확실', completed: '완료', failed: '실패', unknown: '확인 불가'
   }
 } as const

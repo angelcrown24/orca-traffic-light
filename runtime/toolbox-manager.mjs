@@ -7,7 +7,7 @@ import { writeBundle } from './bundle-store.mjs'
 import { copyText } from './clipboard.mjs'
 import { adaptationPrompt } from './provider-adaptation.mjs'
 import { createAutomation } from './automation.mjs'
-import { syncCapabilities } from './shared-sync.mjs'
+import { syncCapabilities, unshareSkill } from './shared-sync.mjs'
 
 const MAX_SELECTION = 24
 export function createToolboxManager({ getContext, getWorkspaces, post, postSkillsChanged = () => {}, postBatchProgress = () => {}, home, maintenance = createSkillMaintenance({ home }), loadSelection = async () => [], saveSelection = async () => {}, loadAutomation = async () => [], saveAutomation = async () => {}, scan = () => scanCatalog({ home }), serviceFactory = createToolboxService, bundleWriter = writeBundle, clipboard = copyText, automationFactory = createAutomation, synchronizer = input => syncCapabilities({ ...input, home }) }) {
@@ -45,7 +45,8 @@ export function createToolboxManager({ getContext, getWorkspaces, post, postSkil
   }
   function snapshot(id, state) {
     return { workspaceId: id, selected: [...state.selected], bundle: state.bundle, events: state.events.map(e => ({ ...e })), automation: {
-      enabled: activeAutomatic.has(id), setup: connectionStatus.setup, providers: connectionStatus.providers,
+      enabled: activeAutomatic.has(id), setup: connectionStatus.setup, managed: Boolean(connectionStatus.managed),
+      needsUpdate: Boolean(connectionStatus.needsUpdate), providers: connectionStatus.providers,
       sessions: connectionStatus.workspaces?.find(entry => entry.workspaceId === id)?.sessions ?? 0,
       appliedIds: automatic.get(id)?.records.map(record => record.id) ?? [],
       ...(automaticErrors.has(id) || automaticErrors.has('*') ? { error: automaticErrors.get(id) ?? automaticErrors.get('*') } : {})
@@ -85,13 +86,13 @@ export function createToolboxManager({ getContext, getWorkspaces, post, postSkil
     const id = await context()
     if (!id) return { workspaceId: null, selected: [], bundle: null, events: [] }
     const current = await local(id)
-    if (automationPromise) connectionStatus = await (await automationPromise).status()
+    connectionStatus = await (await automation()).status()
     await context(id)
     return snapshot(id, current)
   }
   async function automation() {
     assertActive()
-    if (!automationPromise) automationPromise = Promise.resolve().then(() => automationFactory({ onRecommendations: (workspaceId, rows) => {
+    if (!automationPromise) automationPromise = Promise.resolve().then(() => automationFactory({ home, onRecommendations: (workspaceId, rows) => {
       if (disposed) return
       const current = workspaces.get(workspaceId)
       if (!current) return
@@ -148,6 +149,7 @@ export function createToolboxManager({ getContext, getWorkspaces, post, postSkil
           await local(entry.workspaceId)
           const runner = await automation()
           assertActive()
+          if (!(await runner.status()).setup) error('Review the agent instructions before restoring automatic access.')
           await runner.grant({ workspaceId: entry.workspaceId, workspacePath: workspace.path, records, items: data.items.filter(item => records.some(record => record.id === item.id)) })
           assertActive()
           activeAutomatic.add(entry.workspaceId)
@@ -162,7 +164,14 @@ export function createToolboxManager({ getContext, getWorkspaces, post, postSkil
     })
     return initializePromise
   }
-  async function setAutomation({ workspaceId, enabled }) {
+  async function previewAgentInstructions({ workspaceId }) {
+    await context(workspaceId)
+    await workspaceFor(workspaceId)
+    const result = await (await automation()).previewBootstrap()
+    await context(workspaceId)
+    return result
+  }
+  async function setAutomation({ workspaceId, enabled, instructionRevision }) {
     await initialize()
     return locked('$automation', () => locked(workspaceId, async () => {
       await context(workspaceId)
@@ -178,9 +187,17 @@ export function createToolboxManager({ getContext, getWorkspaces, post, postSkil
         const items = data.items.filter(item => selected.includes(item.id))
         const workspace = await workspaceFor(workspaceId)
         await context(workspaceId)
-        await runner.prepare?.()
-        const configured = await runner.enableBootstrap()
-        if (configured?.setup === false) error('Shared instruction setup is incomplete. Check the provider connection status.')
+        const installed = await runner.status()
+        if (!installed.setup || installed.needsUpdate) {
+          if (typeof instructionRevision !== 'string' || !instructionRevision) error('Review the instruction files and confirm installation first.')
+          const preview = await runner.previewBootstrap()
+          if (preview.revision !== instructionRevision) error('The instruction files changed. Review their locations again.')
+          await context(workspaceId)
+          await runner.prepare?.()
+          await context(workspaceId)
+          const configured = await runner.enableBootstrap(instructionRevision)
+          if (configured?.setup === false) error('Shared instruction setup is incomplete. Check the provider connection status.')
+        }
         await context(workspaceId)
         const entry = { workspaceId, records: records.map(({ id, fingerprint }) => ({ id, fingerprint })) }
         const previous = [...automatic.values()]
@@ -214,8 +231,60 @@ export function createToolboxManager({ getContext, getWorkspaces, post, postSkil
       throw cause
     })
   }
+  async function removeAgentInstructions({ workspaceId }) {
+    await initialize()
+    return locked('$automation', () => locked(workspaceId, async () => {
+      await context(workspaceId)
+      await workspaceFor(workspaceId)
+      const current = await local(workspaceId)
+      const runner = await automation()
+      const status = await runner.status()
+      if (status.managed || status.setup || automatic.size) {
+        // Claim runtime ownership before changing any other workspace's authorizations.
+        await runner.prepare?.()
+        await context(workspaceId)
+        await saveAutomation([])
+        const grants = [...automatic.keys()]
+        automatic.clear()
+        activeAutomatic.clear()
+        automaticErrors.clear()
+        try {
+          for (const id of grants) await runner.revoke(id)
+          await runner.disableBootstrap()
+        } finally {
+          await runner.close()
+          automationPromise = null
+          post()
+        }
+      }
+      connectionStatus = await (await automation()).status()
+      return snapshot(workspaceId, current)
+    })).catch(cause => {
+      if (!disposed) { automaticErrors.set(workspaceId, cause.message ?? 'Agent instructions could not be removed.'); post() }
+      throw cause
+    })
+  }
   async function compare({ id }) {
     return compareSources(await scanNow(), id)
+  }
+  async function unshare({ workspaceId, key, revision }) {
+    return locked('$sync', () => locked(workspaceId, async () => {
+      const checkContext = async () => { await context(workspaceId); await workspaceFor(workspaceId); await context(workspaceId) }
+      await checkContext()
+      const data = await scanNow(true)
+      const target = data.items.find(item => item.kind === 'skill' && item.sharing?.unshareKey === key)
+      if (!target) error('The sharing registration changed. Refresh the library.')
+      const result = await unshareSkill({ home, key, revision, workspaceId, checkContext })
+      if (result.status === 'removed') {
+        const next = await scanNow(true), owner = await local(workspaceId)
+        if (!next.items.some(item => item.id === target.id) && owner.selected.includes(target.id)) {
+          const ids = owner.selected.filter(id => id !== target.id)
+          await saveSelection(workspaceId, ids); owner.selected = ids
+        }
+        post()
+      } else await checkContext()
+      return result
+    }))
   }
   async function sync({ workspaceId, ids, preserveProviderCopies, reviewedSourceStamp }) {
     return locked('$sync', () => locked(workspaceId, async () => {
@@ -367,5 +436,5 @@ export function createToolboxManager({ getContext, getWorkspaces, post, postSkil
       // The write is already committed. A closing panel recovers the result from history.
       if (!disposed) Promise.resolve().then(postSkillsChanged).catch(() => {})
     } })
-  return { ...reviews, catalog, activity, state, select, prepare, revoke, copy, copyAdaptation, initialize, setAutomation, sync, compare, dispose }
+  return { ...reviews, catalog, activity, state, select, prepare, revoke, copy, copyAdaptation, initialize, previewAgentInstructions, setAutomation, removeAgentInstructions, sync, unshare, compare, dispose }
 }

@@ -4,6 +4,8 @@ import { chmod, lstat, mkdir, open, readdir, readlink, realpath, rename, rm, sym
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
+import { cleanupSharedSkill, linkIdentity, validLinkedSkills } from './shared-unshare.mjs'
+import { withSharedSkillLock } from './shared-change-lock.mjs'
 import { skillPortability } from './skill-portability.mjs'
 
 const digest = value => createHash('sha256').update(value).digest('hex')
@@ -70,6 +72,7 @@ export async function readSharedRegistry(home = homedir()) {
       if (!/^[a-z0-9][a-z0-9._-]{0,99}$/i.test(slug) || typeof entry?.sourcePath !== 'string' || typeof entry.snapshot !== 'string' || typeof entry.packageFingerprint !== 'string' || typeof entry.sourceStamp !== 'string' || typeof entry.snapshotStamp !== 'string') throw new Error()
       if (!isAbsolute(entry.sourcePath) || !isAbsolute(entry.snapshot) || !within(join(home, '.agents', 'traffic-light', 'shared-skills'), entry.snapshot)) throw new Error()
     }
+    if (!validLinkedSkills(data.linkedSkills)) throw new Error()
     for (const entry of Object.values(data.mcp)) if (entry?.kind !== 'mcp' || typeof entry.id !== 'string' || typeof entry.configPath !== 'string' || !isAbsolute(entry.configPath) || typeof entry.serverKey !== 'string' || typeof entry.fingerprint !== 'string') throw new Error()
     return data
   } catch { throw failure('The shared registry is unreadable or invalid. Existing registrations were preserved.') }
@@ -89,7 +92,10 @@ export async function decorateSharing(catalog, home = homedir()) {
     const shared = catalog.items.find(item => catalog.records.get(item.id)?.path === join(entry.snapshot, 'SKILL.md'))
     const origin = catalog.items.find(item => catalog.records.get(item.id)?.path === join(entry.sourcePath, 'SKILL.md'))
     const item = shared ?? origin
-    if (!item) { catalog.warnings.push('A registered shared skill is no longer available.'); continue }
+    if (!item) {
+      catalog.items.push(unavailableRegistration(slug))
+      continue
+    }
     let state = 'shared', detail
     try {
       if (await realpath(canonical) !== entry.snapshot || (await inspectSkillPackage(entry.snapshot)).stamp !== entry.snapshotStamp) throw new Error()
@@ -101,13 +107,20 @@ export async function decorateSharing(catalog, home = homedir()) {
         }
       }
     } catch { state = 'conflict'; detail = 'A shared package or its source changed location. Existing files were preserved.' }
-    item.sharing = { state, canSync: item.available && state !== 'conflict', ...(detail ? { detail } : {}) }
+    item.sharing = { state, unshareKey: slug, canSync: item.available && state !== 'conflict', ...(detail ? { detail } : {}) }
     const record = catalog.records.get(item.id)
+    item.name = slug
+    record.name = slug
     record.syncKey = slug
     if (shared) {
       record.packageRoot = entry.snapshot; record.packageFingerprint = entry.packageFingerprint
       if (origin?.available && origin !== shared) { hidden.add(origin.id); for (const provider of origin.providers) if (!shared.providers.includes(provider)) shared.providers.push(provider) }
     }
+  }
+  for (const [slug, entry] of Object.entries(registry.linkedSkills ?? {})) {
+    const item = catalog.items.find(item => catalog.records.get(item.id)?.path === join(entry.sourcePath, 'SKILL.md'))
+    if (item) item.sharing = { ...item.sharing, unshareKey: slug }
+    else catalog.items.push(unavailableRegistration(slug))
   }
   catalog.items = catalog.items.filter(item => !hidden.has(item.id))
   for (const pin of Object.values(registry.mcp)) {
@@ -119,6 +132,11 @@ export async function decorateSharing(catalog, home = homedir()) {
         : { state: 'update', canSync: true, detail: 'The source configuration changed. Synchronize explicitly before applying the new version.' }
   }
   return catalog
+}
+
+function unavailableRegistration(slug) {
+  return { id: 'unshare:' + slug, name: slug, kind: 'skill', source: 'Traffic Light', available: false,
+    description: '', providers: [], sharing: { state: 'conflict', unshareKey: slug, canSync: false } }
 }
 
 async function privateDirectory(path) {
@@ -143,6 +161,12 @@ async function linkMissing(destination, canonical, created) {
     if (error.code !== 'EEXIST' || !(await lstat(destination)).isSymbolicLink() || await realpath(destination) !== await realpath(canonical)) throw error
   }
 }
+async function captureLinks(home, paths) {
+  const links = {}
+  for (const path of paths) links[relative(home, path)] = await linkIdentity(path)
+  return links
+}
+
 const slugFor = record => {
   const name = record.name
   if (!/^[a-z0-9][a-z0-9._-]{0,99}$/i.test(name) || name === '.' || name === '..') throw failure('This skill name cannot be used as a shared folder name. Rename it manually first.')
@@ -171,8 +195,9 @@ async function syncSkill(record, registry, home, preserveProviderCopies, reviewe
     if (!current?.isSymbolicLink() || await realpath(canonical) !== previous.snapshot || (await inspectSkillPackage(previous.snapshot)).stamp !== previous.snapshotStamp) throw failure('The shared destination was changed outside Traffic Light. Nothing was overwritten.')
   } else if (current) {
     existingCommon = await realpath(canonical) === source.root
-    if (!existingCommon) throw failure('A different skill already occupies this shared name. Nothing was overwritten.')
+    if (!existingCommon || (Object.hasOwn(registry.linkedSkills ?? {}, slug) && registry.linkedSkills[slug].sourcePath !== source.root)) throw failure('A different skill already occupies this shared name. Nothing was overwritten.')
   }
+  if (!existingCommon && Object.hasOwn(registry.linkedSkills ?? {}, slug)) throw failure('An earlier link registration needs to be removed before sharing this name again.')
   const destinations = []
   for (const root of roots) {
     const destination = join(home, root, slug), info = await missing(destination)
@@ -189,6 +214,11 @@ async function syncSkill(record, registry, home, preserveProviderCopies, reviewe
     const created = []
     try {
       for (const destination of destinations) await linkMissing(destination, canonical, created)
+      if (created.length) {
+        const links = { ...registry.linkedSkills?.[slug]?.links, ...await captureLinks(home,created) }
+        const linkedSkills = { ...registry.linkedSkills, [slug]: { sourcePath: source.root, links } }
+        await saveRegistry(home, { ...registry, linkedSkills }); registry.linkedSkills = linkedSkills
+      }
       return { status: created.length ? 'synced' : 'unchanged', message: 'Existing shared entry linked to missing provider locations. Original files were preserved.', newId: record.id }
     } catch (error) { for (const destination of created.reverse()) await unlink(destination).catch(() => {}); throw error }
   }
@@ -225,6 +255,14 @@ async function syncSkill(record, registry, home, preserveProviderCopies, reviewe
     else if (!current) { await symlink(snapshot, canonical); changedCanonical = true }
     for (const destination of destinations) await linkMissing(destination, canonical, createdLinks)
     const entry = { name: record.name, sourcePath: source.root, sourceStamp: source.stamp, snapshot, snapshotStamp, packageFingerprint: source.fingerprint }
+    // Older registrations did not identify which provider links they created.
+    // Keep them distinguishable until the user has confirmed those exact paths.
+    const links = { ...previous?.links, ...await captureLinks(home,createdLinks) }
+    if (changedCanonical) Object.assign(links, await captureLinks(home,[canonical]))
+    entry.links = links
+    entry.versions = [...new Set([...(previous?.versions ?? []), ...(!exists ? [source.fingerprint] : [])])]
+    if (previous && (!previous.versions || previous.legacyVersions)) entry.legacyVersions = true
+    if (previous && (!previous.links || previous.legacyLinks)) entry.legacyLinks = true
     await saveRegistry(home, { ...registry, skills: { ...registry.skills, [slug]: entry } })
     registry.skills[slug] = entry
     return { status: previous?.packageFingerprint === source.fingerprint && !createdLinks.length ? 'unchanged' : 'synced', message: 'Shared package published; original files and earlier shared versions were preserved.', newId: `skill:${digest(join(snapshot, 'SKILL.md')).slice(0, 24)}` }
@@ -245,9 +283,7 @@ export async function syncCapabilities({ ids, home = homedir(), preserveProvider
   home = await realpath(home)
   const directory = join(home, '.agents', 'traffic-light')
   await privateDirectory(directory)
-  const lock = join(directory, 'shared-sync.lock')
-  try { await mkdir(lock, { mode: 0o700 }) } catch { throw new Error('Synchronization is locked. If an earlier attempt crashed, remove the shared-sync.lock folder under ~/.agents/traffic-light after confirming no sync is running.') }
-  try {
+  return withSharedSkillLock(directory, async () => {
     const { inspectMcpFields, scanCatalog } = await import('./catalog.mjs')
     const catalog = await scanCatalog({ home }), registry = await readSharedRegistry(home), results = []
     for (const id of [...new Set(ids)]) {
@@ -272,5 +308,19 @@ export async function syncCapabilities({ ids, home = homedir(), preserveProvider
       } catch (error) { results.push({ id, name: item.name, status: error.code === 'SYNC_CONFLICT' ? 'conflict' : 'failed', message: error.code === 'SYNC_CONFLICT' ? error.message : 'Synchronization failed. Existing provider files were preserved.' }) }
     }
     return { results }
-  } finally { await rm(lock, { recursive: true, force: true }) }
+  })
+}
+
+// The same lock serializes publishing, skill maintenance and reversing a publication.
+export async function unshareSkill({ home = homedir(), key, revision, workspaceId, checkContext = async () => {} }) {
+  home = await realpath(home)
+  const directory = dirname(registryPath(home))
+  if (await realpath(directory) !== directory) throw failure('Shared storage changed location.')
+  if (typeof key !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,99}$/i.test(key) ||
+      (revision !== undefined && (typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision)))) throw failure('Invalid sharing registration.')
+  if (!(await missing(registryPath(home)))) throw failure('The sharing registration changed. Refresh the library.')
+  return withSharedSkillLock(directory, async () => {
+    const registry = await readSharedRegistry(home)
+    return await cleanupSharedSkill({ home, key, revision, workspaceId, registry, roots, inspectSkillPackage, saveRegistry, checkContext })
+  })
 }

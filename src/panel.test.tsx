@@ -1,6 +1,4 @@
-import type { TreeItem } from 'orca'
-import type { SessionShells, SessionWorkNode } from './session-shells'
-import { assert, mockHost, mount, test, type TestPanel } from 'orca/testing'
+import { assert, mockHost, mount, test } from 'orca/testing'
 import * as panel from './panel'
 
 test('shows observed calls and does not label finished as successful', async () => {
@@ -34,320 +32,26 @@ test('clears stale calls on refresh failure and recovers on retry', async () => 
   await view.unmount()
 })
 
-const options = [
-  { id: 'chat:one', kind: 'chat' as const, provider: 'Codex', number: 1 },
-  { id: 'terminal:two', kind: 'terminal' as const, number: 1 }
-]
-const shell: SessionWorkNode = { id: 'sh', name: 'zsh', kind: 'shell', state: 'running', children: [] }
-const edit: SessionWorkNode = { id: 'edit', kind: 'edit', state: 'running', children: [] }
-const terminal: SessionWorkNode = { id: 'term', name: 'fish', kind: 'terminal', state: 'connected', children: [] }
-const treeTarget = { type: 'Tree' }
-function treeRoots(view: TestPanel) {
-  return (view.find(treeTarget)?.props.items as TreeItem[] | undefined) ?? []
-}
-function treeRow(view: TestPanel, label: string) {
-  function find(items: readonly TreeItem[]): TreeItem | undefined {
-    for (const item of items) {
-      if (item.label === label) return item
-      const child = find(item.children ?? [])
-      if (child) return child
-    }
-  }
-  return find(treeRoots(view)) ?? null
-}
-const session = {
-  status: 'ready' as const, options, selected: 'chat:one',
-  rows: [{ kind: 'shell' as const, state: 'running' as const, name: 'zsh' }],
-  subagents: [], tree: [shell]
-}
-
-test('shows the selected session shells with its active subagents and removes completed and idle hosts', async () => {
-  const host = mockHost({ settings: { nativeActivity: true, antigravityChildStatus: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [
-      { agentType: 'another-workspace-agent', state: 'working', toolName: null },
-      { agentType: 'completed-parent', state: 'done', toolName: null }
-    ] }),
-    'session.shells': () => ({ ...session, mainWorking: true, turnActivity: { tools: 4, commands: 1, edits: 0 }, subagents: [
-      { role: 'subagent', label: 'review', agentType: 'antigravity', state: 'working', toolName: null, statusSource: 'antigravity', statusUpdatedAt: 1700000000000 },
-      { role: 'subagent', label: 'watch', agentType: 'codex', state: 'monitoring', toolName: null },
-      { role: 'subagent', label: 'finished', agentType: 'codex', state: 'done', toolName: null },
-      { role: 'subagent', label: 'idle-job', agentType: 'codex', state: 'idle', toolName: null },
-      { role: 'subagent', label: 'uncertain-job', agentType: 'codex', state: 'unverifiable', toolName: null }
-    ], tree: [
-      shell,
-      { id: 'review', name: 'review', kind: 'subagent', state: 'working', statusSource: 'antigravity', statusUpdatedAt: 1700000000000, children: [] },
-      { id: 'watch', name: 'watch', kind: 'subagent', state: 'monitoring', children: [edit] }
-    ] })
-  } })
-  const view = await mount(panel, { host })
-  try {
-    assert.ok(view.find({ text: 'Session activity' }))
-    assert.ok(view.find({ text: '2 active subagents' }))
-    assert.equal(treeRoots(view)[0]?.label, 'Codex Chat 1')
-    assert.equal(treeRoots(view)[0]?.description, 'Working')
-    assert.ok(view.find({ text: 'This turn · 4 tool calls · 1 command' }))
-    assert.ok(treeRow(view, 'zsh'))
-    assert.ok(treeRow(view, 'review'))
-    assert.ok(treeRow(view, 'watch'))
-    assert.equal(treeRow(view, 'watch')?.description, 'Monitoring')
-    assert.equal(treeRow(view, 'watch')?.children?.[0]?.label, 'File edit')
-    await view.selectItem(treeTarget, 'review')
-    assert.equal(view.find({ type: 'RelativeTime' })?.props.at, 1700000000000)
-    for (const text of ['another-workspace-agent', 'completed-parent', 'finished', 'idle-job', 'uncertain-job', 'Agent activity', 'Done', 'Idle']) {
-      assert.equal(treeRow(view, text), null)
-      assert.equal(view.find({ text }), null)
-    }
-    await view.toggle({ label: 'Settings & privacy' })
-    await view.toggle({ label: 'Show Antigravity subagent status' })
-    assert.equal(treeRow(view, 'review'), null)
-    assert.ok(treeRow(view, 'watch'))
-    assert.deepEqual(view.errors, [])
-  } finally { await view.unmount() }
-})
-
-test('shows a working Antigravity chat even without child events and clears its status independently of its children', async () => {
-  const ctx = { workspaceId: 'workspace-1', branch: 'main', displayName: 'Workspace', terminals: [] }
-  let mainWorking: true | undefined = true
-  let tree: SessionWorkNode[] = []
+test('hidden panels skip terminal status requests and resume on the Activity tab', async () => {
+  let reads = 0
   const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
-    'session.shells': () => ({ ...session, options: [{ ...options[0], provider: 'antigravity' }], rows: [],
-      ...(mainWorking ? { mainWorking } : {}), turnActivity: { tools: 15, commands: 6, edits: 8 }, tree })
+    'calls.get': () => ({workspace:true,calls:[]}),
+    'activity.terminals': () => { reads++; return {status:'ready',rows:[],openTerminals:0} }
   } })
-  const view = await mount(panel, { host, locale: 'ko-KR' })
-  try {
-    const root = () => treeRow(view, 'Antigravity 대화 1')
-    const summary = { text: '이번 턴 · 도구 호출 15회 · 명령 6회 · 변경 기록 8건' }
-    assert.equal(root()?.description, '작업 중')
-    assert.ok(view.find(summary))
-    assert.equal(root()?.children, undefined)
-    assert.equal(view.find({ text: '현재 보고된 활동이 없습니다.' }), null)
-    tree = [edit]
-    await view.emit('workspace.changed', { context: ctx })
-    assert.equal(root()?.description, '작업 중')
-    assert.equal(root()?.children?.[0]?.label, '파일 편집')
-    assert.equal(root()?.children?.[0]?.description, '실행 중')
-    tree = [shell]
-    await view.emit('workspace.changed', { context: ctx })
-    assert.equal(treeRow(view, '파일 편집'), null)
-    assert.ok(view.find(summary))
-    mainWorking = undefined
-    await view.emit('workspace.changed', { context: ctx })
-    assert.equal(root()?.description, undefined)
-    assert.equal(view.find(summary), null)
-    assert.equal(root()?.children?.[0]?.label, 'zsh')
-    tree = []
-    await view.emit('workspace.changed', { context: ctx })
-    assert.equal(root(), null)
-    assert.ok(view.find({ text: '현재 보고된 활동이 없습니다.' }))
-    assert.deepEqual(view.errors, [])
-  } finally { await view.unmount() }
-})
-
-test('keeps named live calls with their owner and shows grouped finished tools between calls in the open chat', async () => {
-  const ctx = { workspaceId: 'w', branch: 'main', displayName: 'Workspace', terminals: [] }
-  const read: SessionWorkNode = { id: 'read-1', kind: 'tool', toolName: 'view_file', state: 'running', children: [] }
-  const worker: SessionWorkNode = { id: 'worker', name: 'reviewer', kind: 'subagent', state: 'working', children: [{ ...read, id: 'read-child' }] }
-  let tree: SessionWorkNode[] = [read, { ...read, id: 'read-2' }, { ...shell, toolName: 'execute' }, { ...edit, toolName: 'edit_file' }, worker]
-  const turnTools: NonNullable<SessionShells['turnTools']> = [
-    { name: 'edit_file', count: 5, state: 'completed' }, { name: 'docs/search', count: 2, state: 'failed' },
-    { name: 'read_file', count: 1, state: 'cancelled' }, { name: 'search_files', count: 1, state: 'completed' }
-  ]
-  let open = true
-  const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
-    'session.shells': () => ({ ...session, mainWorking: open ? true : undefined, turnTools, turnToolsLimited: true, tree })
-  } })
-  const view = await mount(panel, { host, locale: 'ko-KR' })
-  try {
-    const rootChildren = () => treeRoots(view)[0].children ?? []
-    const recent = () => treeRow(view, '최근 사용 도구')!
-    const more = () => treeRow(view, '도구 1개 더 보기')!
-    assert.deepEqual(rootChildren().map(row => row.label), ['view_file', 'execute', 'edit_file', 'reviewer', '최근 사용 도구'])
-    assert.equal(rootChildren()[0].description, '실행 중 · 2건')
-    assert.equal(rootChildren()[1].description, '실행 중 · zsh')
-    assert.equal(rootChildren()[2].description, '실행 중')
-    assert.equal(rootChildren()[3].children?.[0]?.description, '실행 중')
-    assert.equal(recent().description, '최근 종료 30회 기준')
-    assert.equal(recent().children?.[0]?.description, '5회 종료')
-    assert.equal(recent().children?.[1]?.description, '2회 · 최근 실패')
-    assert.equal(recent().children?.[2]?.description, '취소')
-    assert.ok(view.expandedOf(treeTarget).includes(recent().key))
-    assert.equal(view.expandedOf(treeTarget).includes(more().key), false)
-    await view.selectItem(treeTarget, more().key)
-    assert.ok((view.find(treeTarget)?.props.expanded as string[]).includes(more().key))
-    await view.selectItem(treeTarget, more().children![0].key)
-    assert.ok(view.find({ text: '종료된 호출 1회 · 최근 결과 완료' }))
-    await view.collapse(treeTarget, recent().key)
-    assert.equal(view.find({ text: '종료된 호출 1회 · 최근 결과 완료' }), null)
-    const liveKey = rootChildren()[0].key
-    tree = [{ ...read, id: 'read-2' }]
-    await view.emit('workspace.changed', { context: ctx })
-    assert.equal(rootChildren()[0].key, liveKey)
-    assert.equal(rootChildren()[0].description, '실행 중')
-    assert.equal(view.expandedOf(treeTarget).includes(recent().key), false)
-    tree = []
-    await view.emit('workspace.changed', { context: ctx })
-    assert.deepEqual(rootChildren().map(row => row.label), ['최근 사용 도구'])
-    open = false
-    await view.emit('workspace.changed', { context: ctx })
-    assert.equal(treeRow(view, '최근 사용 도구'), null)
-    assert.deepEqual(view.errors, [])
-    assert.deepEqual(view.warnings, [])
-  } finally { await view.unmount() }
-})
-
-test('opens every live branch by default and preserves folds and unnamed worker labels as siblings change', async () => {
-  const ctx = { workspaceId: 'workspace-1', branch: 'main', displayName: 'Workspace', terminals: [] }
-  const reviewer: SessionWorkNode = { id: 'worker-a', kind: 'subagent', state: 'working', children: [
-    { id: 'verifier', name: 'verifier', kind: 'subagent', state: 'monitoring', children: [shell] }
-  ] }
-  const runner: SessionWorkNode = { id: 'worker-b', kind: 'subagent', state: 'working', children: [] }
-  let tree = [reviewer, runner]
-  const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
-    'session.shells': () => ({ ...session, tree })
-  } })
-  const view = await mount(panel, { host })
-  try {
-    await view.emit('workspace.changed', { context: ctx })
-    const root = treeRoots(view)[0]
-    assert.deepEqual(root.children?.map(item => item.label), ['Subagent 1', 'Subagent 2'])
-    const verifier = root.children?.[0]?.children?.[0]
-    assert.equal(verifier?.label, 'verifier')
-    assert.equal(verifier?.children?.[0]?.label, 'zsh')
-    assert.deepEqual(view.expandedOf(treeTarget).sort(), [root.key, 'worker-a', 'verifier'].sort())
-    await view.activateItem(treeTarget, 'verifier')
-    assert.ok(view.find({ text: 'verifier' }))
-    await view.collapse(treeTarget, 'worker-a')
-    assert.equal(view.find({ text: 'verifier' }), null)
-    tree = [reviewer, { ...runner, children: [{ ...shell, id: 'second-shell', name: 'fish' }] }]
-    await view.emit('workspace.changed', { context: ctx })
-    // Orca's renderer follows the controlled prop; the test kit's expandedOf is seeded only once.
-    const expanded = view.find(treeTarget)?.props.expanded as string[]
-    assert.equal(expanded.includes('worker-a'), false)
-    assert.ok(expanded.includes('worker-b'))
-    tree = [runner, { ...runner, id: 'worker-c' }]
-    await view.emit('workspace.changed', { context: ctx })
-    assert.deepEqual(treeRoots(view)[0].children?.map(item => item.label), ['Subagent 2', 'Subagent 3'])
-    assert.deepEqual(view.errors, [])
-  } finally { await view.unmount() }
-})
-
-test('keeps deep and wide work within Orca’s Tree limits and reports the omitted count', async () => {
-  let branch: SessionWorkNode = shell
-  for (let depth = 0; depth < 18; depth++) {
-    branch = { id: 'agent-' + depth, name: 'worker', kind: 'subagent', state: 'working', children: [branch] }
-  }
-  const siblings = Array.from({ length: 2000 }, (_, index) => ({ ...shell, id: 'peer-' + index }))
-  const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
-    'session.shells': () => ({ ...session, tree: [branch, ...siblings] })
-  } })
-  const view = await mount(panel, { host })
-  try {
-    assert.ok(view.find({ text: '18 active subagents' }))
-    assert.ok(view.find({ text: '20 more items exceed Orca’s tree display limit.' }))
-    assert.equal(treeRoots(view)[0]?.children?.length, 1985)
-    assert.deepEqual(view.errors, [])
-    assert.deepEqual(view.warnings, [])
-  } finally { await view.unmount() }
-})
-
-test('selects a session when Orca cannot resolve focus and clears the old session when a selection changes', async () => {
-  let focused = false
-  const inputs: (string | null)[] = []
-  const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
-    'session.shells': ({ selected }) => {
-      inputs.push(selected)
-      if (!selected && !focused) return { status: 'select', options, selected: null, rows: [], subagents: [] }
-      if (selected === 'terminal:two') return { ...session, selected, tree: [terminal], rows: [{ kind: 'terminal', state: 'connected', name: 'fish' }] }
-      return session
-    }
-  } })
-  const view = await mount(panel, { host, locale: 'ko-KR' })
-  try {
-    assert.equal(treeRow(view, 'zsh'), null)
-    assert.equal(treeRow(view, 'fish'), null)
-    assert.ok(view.find({ label: '세션' }))
-    await view.select({ label: '세션' }, 'terminal:two')
-    assert.ok(treeRow(view, 'fish'))
-    assert.equal(treeRow(view, 'fish')?.description, '연결됨')
-    assert.equal(treeRow(view, 'zsh'), null)
-    focused = true
-    await view.select({ label: '세션' }, 'follow-active')
-    assert.ok(treeRow(view, 'zsh'))
-    assert.equal(treeRow(view, 'fish'), null)
-    await view.select({ label: '세션' }, 'terminal:two')
-    focused = false
-    await view.emit('workspace.changed', { context: null })
-    assert.equal(treeRow(view, 'fish'), null)
-    assert.equal(inputs.at(-1), null)
-    assert.deepEqual(view.errors, [])
-  } finally { await view.unmount() }
-})
-
-test('distinguishes a verified empty session, disabled monitoring and an unavailable source', async () => {
-  let status: 'disabled' | 'ready' | 'unavailable' = 'disabled'
-  const host = mockHost({ settings: { nativeActivity: false }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
-    'session.shells': () => ({ status, selected: status === 'ready' ? 'chat:one' : null, options: status === 'ready' ? options.slice(0, 1) : [], rows: [], subagents: [], tree: [] })
-  } })
-  const view = await mount(panel, { host })
-  try {
-    assert.ok(view.find({ text: 'Turn on chat activity in Settings & privacy to monitor this session.' }))
-    await view.toggle({ label: 'Settings & privacy' })
-    assert.equal(view.find({ label: 'Show Antigravity subagent status' })?.disabled, true)
-    status = 'ready'
-    await view.toggle({ label: 'Show chat activity' })
-    assert.ok(view.find({ text: 'No current activity reported.' }))
-    assert.equal(view.find({ text: 'Agent activity' }), null)
-    status = 'unavailable'
-    await view.emit('workspace.changed', { context: null })
-    assert.ok(view.find({ text: 'Session status is unavailable.' }))
-    assert.equal(view.find({ text: 'No current activity reported.' }), null)
-    assert.deepEqual(view.errors, [])
-  } finally { await view.unmount() }
-})
-
-test('does not read activity sources or refresh terminal calls on hook events while hidden', async () => {
-  let requests = 0
-  let shellRequests = 0
-  let terminalReads = 0
-  const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => { terminalReads++; return { workspace: true, calls: [] } },
-    'session.shells': () => { shellRequests++; return { status: 'select', selected: null, options: [], rows: [], subagents: [] } },
-    'native.get': () => { requests++; return { status: 'ready', activities: [], resources: [] } }
-  } })
-  const view = await mount(panel, { host, visible: false })
+  const view = await mount(panel, { host, visible:false })
   try {
     await view.post('calls.changed', {})
-    assert.equal(terminalReads, 0)
-    assert.equal(requests, 0)
-    assert.equal(shellRequests, 0)
-    await view.emit('workspace.changed', { context: null })
-    assert.equal(requests, 0)
-    assert.equal(shellRequests, 0)
+    assert.equal(reads,0)
     await view.setVisible(true)
-    await view.emit('workspace.changed', { context: null })
-    assert.equal(requests, 1)
-    assert.ok(shellRequests > 0)
-    const visibleReads = shellRequests
+    await view.emit('workspace.changed',{context:null})
+    assert.ok(reads>0)
+    const previous = reads
     await view.setVisible(false)
-    await view.emit('workspace.changed', { context: null })
-    assert.equal(requests, 1)
-    assert.equal(shellRequests, visibleReads)
+    await view.emit('workspace.changed',{context:null})
+    await view.post('calls.changed',{})
+    assert.equal(reads,previous)
   } finally { await view.unmount() }
 })
-
 
 test('shows detected resource names and explains the detection source in privacy details', async () => {
   const host = mockHost({ requests: { 'calls.get': () => ({ workspace: true, calls: [], resources: [
@@ -360,20 +64,7 @@ test('shows detected resource names and explains the detection source in privacy
     assert.equal(Boolean(view.find({ text: 'figma-local' })), true)
     await view.toggle({ label: 'Settings & privacy' })
     await view.toggle({ label: 'How activity is read' })
-    assert.equal(Boolean(view.find({ text: 'Observed in tool calls, skill file paths and the shared runner. In use marks a running request or an ongoing agent turn.' })), true)
-    assert.deepEqual(view.errors, [])
-  } finally { await view.unmount() }
-})
-
-test('shows both native and terminal resource names', async () => {
-  const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [], resources: [{ category: 'skill', name: 'ux', evidence: 'inferred' }] }),
-    'native.get': () => ({ status: 'ready', activities: [], resources: [{ category: 'plugin', name: 'example', evidence: 'observed' }] })
-  } })
-  const view = await mount(panel, { host })
-  try {
-    assert.equal(Boolean(view.find({ text: 'ux' })), true)
-    assert.equal(Boolean(view.find({ text: 'example' })), true)
+    assert.equal(Boolean(view.find({ text: 'Observed in tool calls, skill file paths and the shared runner. In use marks a running request in a terminal or the shared runner.' })), true)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })
@@ -401,24 +92,6 @@ test('marks only active resources and clears the badge when a call ends', async 
   } finally { await view.unmount() }
 })
 
-test('merges native activity across sources and clears it on opt-out', async () => {
-  const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [], resources: [{ category: 'skill', name: 'ui-ux-pro-max', evidence: 'observed' }], activeResources: [] }),
-    'native.get': () => ({ status: 'ready', activities: [], resources: [], activeResources: [{ category: 'skill', name: 'ui-ux-pro-max', evidence: 'inferred' }] })
-  } })
-  const view = await mount(panel, { host, locale: 'ko-KR' })
-  try {
-    assert.equal(Boolean(view.find({ text: 'ui-ux-pro-max' })), true)
-    assert.equal(Boolean(view.find({ text: '현재 사용 중' })), true)
-    await view.toggle({ label: '설정 및 개인정보' })
-    await view.toggle({ label: '채팅 활동 표시' })
-    assert.equal(view.find({ text: '현재 사용 중' }), null)
-    assert.equal(Boolean(view.find({ text: 'ui-ux-pro-max' })), true)
-    assert.deepEqual(view.errors, [])
-  } finally { await view.unmount() }
-})
-
-
 test('shows Korean labels and privacy disclosure beside the switch', async () => {
   const host = mockHost({ settings: { nativeActivity: false }, requests: {
     'calls.get': () => ({ workspace: true, calls: [], resources: [{ category: 'skill', name: 'ui-ux-pro-max', evidence: 'inferred' }] })
@@ -429,9 +102,9 @@ test('shows Korean labels and privacy disclosure beside the switch', async () =>
     assert.equal(Boolean(view.find({ text: '스킬' })), true)
     await view.toggle({ label: '설정 및 개인정보' })
     await view.toggle({ label: '어떤 정보를 읽나요?' })
-    assert.equal(Boolean(view.find({ text: '도구 호출, 스킬 파일 경로, 공용 실행기에서 감지한 항목입니다. 현재 사용 중은 요청이나 에이전트 작업이 진행 중일 때 표시됩니다.' })), true)
-    assert.equal(Boolean(view.find({ label: '채팅 활동 표시' })), true)
-    assert.equal(Boolean(view.find({ text: '켜면 모든 작업공간의 상태에 포함된 프롬프트·도구 입력·응답을 읽습니다. macOS에서는 현재 작업공간의 최근 도구 입력도 읽습니다.' })), true)
+    assert.equal(Boolean(view.find({ text: '도구 호출, 스킬 파일 경로, 공용 실행기에서 감지한 항목입니다. 현재 사용 중은 도구 호출이나 공용 실행기 요청이 진행 중일 때 표시됩니다.' })), true)
+    assert.equal(Boolean(view.find({ label: '터미널 에이전트 상태 표시' })), true)
+    assert.equal(Boolean(view.find({ text: 'Orca 공식 API로 현재 작업공간의 터미널 에이전트 상태를 표시합니다.' })), true)
     assert.deepEqual(view.errors, [])
   } finally { await view.unmount() }
 })
@@ -483,36 +156,20 @@ test('marks only Jev-linked uses in existing resource and call rows, and clears 
   } finally { await view.unmount() }
 })
 
-test('hidden activity refreshes its workspace history on return and shows provider-native ordinary tools', async () => {
+test('refreshes shared runner events when activity becomes visible again', async () => {
   let reads = 0
-  const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'toolbox.activity': () => { reads++; return { workspaceId: 'ws', recommendations: [], events: [] } },
-    'native.get': () => ({ status: 'ready', resources: [], activities: [], recentTools: [
-      { id: 'ag1', name: 'view_file', agentType: 'Antigravity', observedAt: 1700000000000, state: 'completed' },
-      { id: 'ag2', name: 'jev-code/rank', agentType: 'Antigravity', observedAt: 1700000000020, state: 'completed' }
-    ] })
-  } })
-  const view = await mount(panel, { host, visible: false })
+  const host = mockHost({requests:{
+    'calls.get': () => ({workspace:true,calls:[]}),
+    'toolbox.activity': () => { reads++; return {workspaceId:'ws',recommendations:[],events:[] } }
+  }})
+  const view = await mount(panel,{host,visible:false})
   try {
-    await view.post('toolbox.changed', {})
-    assert.equal(reads, 0)
+    await view.post('toolbox.changed',{})
+    assert.equal(reads,0)
     await view.setVisible(true)
-    await view.post('toolbox.changed', {})
-    assert.equal(reads, 1)
-    await view.emit('workspace.changed', { context: null })
-    assert.equal(view.find({ label: /Jev/ }), null)
-    assert.equal(view.find({ text: 'jev-code/rank' }), null)
-    await view.toggle({ label: 'Recent tool calls · 2' })
-    assert.ok(view.find({ text: 'jev-code/rank' }))
-    assert.equal(view.find({ type: 'Badge', text: 'Jev' }), null)
-    assert.ok(view.find({ text: 'view_file' }))
-    assert.ok(view.find({ text: 'Antigravity' }))
-    assert.ok(view.find({ text: 'Completed' }))
-    await view.toggle({ label: 'Settings & privacy' })
-    await view.toggle({ label: 'Show chat activity' })
-    assert.equal(view.find({ text: 'view_file' }), null)
-    assert.deepEqual(view.errors, [])
+    await view.post('toolbox.changed',{})
+    assert.equal(reads,1)
+    assert.deepEqual(view.errors,[])
   } finally { await view.unmount() }
 })
 
@@ -535,31 +192,20 @@ test('live items precede earlier items across types and long lists can be paged'
   } finally { await view.unmount() }
 })
 
-test('an unavailable pinned session stays selected until the user explicitly follows another', async () => {
-  let attached = true
-  const inputs: (string | null)[] = []
-  const ctx = { workspaceId: 'workspace-1', branch: 'main', displayName: 'Workspace', terminals: [] }
-  const host = mockHost({ settings: { nativeActivity: true }, requests: {
-    'calls.get': () => ({ workspace: true, calls: [] }),
-    'native.get': () => ({ status: 'ready', resources: [], activities: [] }),
-    'session.shells': ({ selected }) => {
-      inputs.push(selected)
-      if (!selected) return { ...session, selected: 'terminal:two', tree: [terminal], rows: [{ kind: 'terminal', name: 'fish', state: 'connected' }] }
-      return attached ? { ...session, selected } : { status: 'select', selected: null, rows: [], subagents: [], options: options.slice(1) }
-    }
+test('groups live public tool names underneath their terminal and explains unavailable native chat coverage', async () => {
+  const host = mockHost({ settings:{nativeActivity:true}, requests:{
+    'calls.get':() => ({workspace:true,calls:[]}),
+    'activity.terminals':() => ({status:'ready',openTerminals:2,rows:[{terminal:1,agent:'codex',state:'working',tools:['exec_command','Read']}]})
   } })
-  const view = await mount(panel, { host })
+  const view = await mount(panel,{host,locale:'en-US'})
   try {
-    await view.emit('workspace.changed', { context: ctx })
-    await view.select({ label: 'Session' }, 'chat:one')
-    attached = false
-    await view.emit('workspace.changed', { context: ctx })
-    await view.emit('workspace.changed', { context: ctx })
-    assert.equal(inputs.at(-1), 'chat:one')
-    assert.equal(treeRow(view, 'fish'), null)
-    assert.ok(view.find({ text: 'The selected session is no longer available. Choose a session to continue.' }))
-    await view.select({ label: 'Session' }, 'follow-active')
-    assert.ok(treeRow(view, 'fish'))
-    assert.deepEqual(view.errors, [])
+    assert.ok(view.find({text:'Codex · Terminal 1'}))
+    assert.ok(view.find({text:'Working'}))
+    assert.ok(view.find({text:'exec_command · Read'}))
+    assert.ok(view.find({text:/Native chat tool calls and subagent trees/}))
+    await view.toggle({label:'Settings & privacy'})
+    await view.toggle({label:'Show terminal agent status'})
+    assert.equal(view.find({text:'exec_command · Read'}),null)
+    assert.deepEqual(view.errors,[])
   } finally { await view.unmount() }
 })

@@ -21,7 +21,7 @@ import {
   privateDirectory,
   bootstrapStatus,
   installBootstrap,
-  refreshOwnedBootstrap,
+  previewBootstrap,
   removeBootstrap
 } from './bootstrap.mjs'
 
@@ -392,7 +392,6 @@ export async function createAutomation(options = {}) {
             throw reject('AUTOMATION_CONFLICT', 'The connection owner changed while preparing.')
           await rename(leasePath, join(base, 'automation-stale-' + randomUUID() + '.json'))
         }
-        await refreshOwnedBootstrap(home)
         service = await createToolboxService({
           resolveRecord: options.resolveRecord ?? defaultResolve,
           onEvent: event,
@@ -546,8 +545,9 @@ export async function createAutomation(options = {}) {
         }))
       }
     },
-    async enableBootstrap() {
-      await installBootstrap({ home })
+    previewBootstrap: () => previewBootstrap({ home }),
+    async enableBootstrap(revision) {
+      await installBootstrap({ home, revision })
       return this.status()
     },
     async disableBootstrap() {

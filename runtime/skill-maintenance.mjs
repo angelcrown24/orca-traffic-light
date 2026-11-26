@@ -1,3 +1,4 @@
+import { withSharedSkillLock } from './shared-change-lock.mjs'
 import { randomUUID } from 'node:crypto'
 import { chmod, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rmdir, symlink, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -140,33 +141,6 @@ async function restore(home, folder, row, checkContext) {
   if (row.kind === 'edit') await unlink(join(folder, 'original.md')).catch(() => {})
 }
 
-// An atomic symlink claim interoperates with syncCapabilities' mkdir lock. Only a
-// marker belonging to a known-dead process of this module can be reclaimed.
-async function claim(path, token, depth = 0) {
-  const busy = () => fail('BUSY', 'Another shared skill change is in progress.')
-  try { await symlink(token, path); return }
-  catch (error) { if (error.code !== 'EEXIST') throw error }
-  const previous = await readlink(path).catch(() => '')
-  const owner = /^traffic-light-maintenance-(\d+)-([0-9a-f-]{36})$/.exec(previous)
-  if (!owner || !uuid.test(owner[2]) || depth >= 3) throw busy()
-  try { process.kill(Number(owner[1]), 0); throw busy() }
-  catch (error) { if (error.code !== 'ESRCH') throw busy() }
-  // Multiple workers may notice the same dead PID. Elect one to retire this
-  // specific incarnation, and recheck after election before removing anything.
-  const reclaim = path + '.recover-' + owner[2]
-  await claim(reclaim, token, depth + 1)
-  try {
-    if (await readlink(path).catch(() => '') === previous) await unlink(path)
-    try { await symlink(token, path) } catch (error) { if (error.code === 'EEXIST') throw busy(); throw error }
-  } finally { if (await readlink(reclaim).catch(() => '') === token) await unlink(reclaim) }
-}
-
-async function locked(base, run) {
-  const path = join(base, 'shared-sync.lock'), token = 'traffic-light-maintenance-' + process.pid + '-' + randomUUID()
-  await claim(path, token)
-  try { return await run() } finally { if (await readlink(path).catch(() => '') === token) await unlink(path) }
-}
-
 export function createSkillMaintenance({ home = homedir() } = {}) {
   async function locations(create = false) {
     const root = await realpath(home)
@@ -199,7 +173,7 @@ export function createSkillMaintenance({ home = homedir() } = {}) {
     if (input.kind === 'edit' && (typeof input.body !== 'string' || !input.body.trim() || input.body.includes('\0') || Buffer.byteLength(input.body) > 65536)) throw fail('INVALID', 'invalid')
     await checkContext()
     const { root: home, base, archive } = await locations(true)
-    return locked(base, async () => {
+    return withSharedSkillLock(base, async () => {
       const id = group ? group.batchId + '.' + group.batchIndex : randomUUID()
       const folder = join(archive, id)
       const intent = group && hash(JSON.stringify([input.kind, input.id, input.retainedId, group.successorId, input.revision, input.body]))
@@ -278,7 +252,7 @@ export function createSkillMaintenance({ home = homedir() } = {}) {
     if (!isReceiptId(receiptId)) throw fail('INVALID', 'invalid')
     await checkContext()
     const { root: home, base, archive } = await locations()
-    return locked(base, async () => {
+    return withSharedSkillLock(base, async () => {
       const folder = join(archive, receiptId), row = await loadRecord(home, folder)
       if (row.workspaceId !== workspaceId) throw fail('INVALID', 'invalid')
       if (row.state !== 'restored') await restore(home, folder, row, checkContext)
@@ -289,7 +263,7 @@ export function createSkillMaintenance({ home = homedir() } = {}) {
     if (!isBatchId(batchId)) throw fail('INVALID', 'invalid')
     await checkContext()
     const { root: home, base, archive } = await locations()
-    return locked(base, async () => {
+    return withSharedSkillLock(base, async () => {
       const entries = (await readdir(archive)).filter(id => id.startsWith(batchId + '.') && isReceiptId(id))
         .sort((a, b) => Number(b.slice(37)) - Number(a.slice(37)))
       if (!entries.length) throw fail('INVALID', 'invalid')

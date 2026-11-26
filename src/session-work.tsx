@@ -1,108 +1,65 @@
-import { atom, Badge, Heading, plugin, read, Row, Select, set, Stack, Text } from 'orca'
-import type { SessionShells } from './session-shells'
-import { resetWorkTree, sessionTree, SessionWorkTree, updateWorkTree } from './session-work-tree'
+import { atom, Badge, Box, Button, Heading, plugin, read, Row, set, Stack, Text } from 'orca'
+import type { TerminalActivity } from './terminal-activity'
 
-const report = atom<SessionShells | null>(null)
-const selected = atom<string | null>(null)
-const fetching = atom(false)
-let generation = 0
-let pending: Promise<void> | null = null
+const activity = atom<TerminalActivity | null>(null)
+const page = atom(0)
+const pageSize = 6
+let generation = 0, pending: Promise<void> | null = null
 
-export function resetSessionWork(resetSelection = true) {
-  generation++
-  pending = null
-  set(report, null)
-  set(fetching, false)
-  if (resetSelection) { set(selected, null); resetWorkTree() }
+export function resetSessionWork() {
+  generation++; pending = null
+  set(activity, null); set(page, 0)
 }
 
 export function refreshSessionWork(visible: () => boolean): Promise<void> {
   if (!visible()) return Promise.resolve()
   if (pending) return pending
-  const current = generation
-  const choice = read(selected)
+  const version = generation
   pending = (async () => {
     try {
-      const next = await plugin.request('session.shells', { selected: choice })
-      if (current !== generation || !visible()) return
-      if (!next || !Array.isArray(next.options) || (next.status === 'ready' && !Array.isArray(next.tree))) throw new Error('Shell status unavailable')
-      if (next.status === 'ready' && next.selected) updateWorkTree(next.selected, next.tree!, next.mainWorking ? next.turnTools : undefined)
-      set(report, next)
+      const result = await plugin.request('activity.terminals')
+      if (version === generation && visible()) set(activity, result)
     } catch {
-      if (current === generation && visible()) set(report, { status: 'unavailable', selected: null, options: [], rows: [], subagents: [] })
-    } finally {
-      if (current === generation) { pending = null; set(fetching, false) }
-    }
+      if (version === generation && visible()) set(activity, { status:'unavailable', openTerminals:0, rows:[] })
+    } finally { if (version === generation) pending = null }
   })()
   return pending
 }
 
 const copy = {
   en: {
-    title: 'Session activity', session: 'Session', chat: 'Chat', terminal: 'Terminal',
-    choose: 'Choose a session', auto: 'Follow selection', ready: 'No current activity reported.',
-    missing: 'The selected session is no longer available. Choose a session to continue.',
-    noSession: 'No local chat or terminal is available in this workspace.', unavailable: 'Session status is unavailable.', disabled: 'Turn on chat activity in Settings & privacy to monitor this session.',
-    loading: 'Checking session…'
+    heading:'Terminal activity', terminal:'Terminal', open:'Open terminals', working:'Working', waiting:'Waiting', blocked:'Blocked', observed:'Tool running',
+    previous:'Previous terminals', next:'Next terminals', disabled:'Turn on terminal agent status in Settings & privacy.', loading:'Checking terminal agents…',
+    missing:'Terminal status is unavailable.', partial:'Agent status is unavailable. Observed terminal calls are shown.',
+    empty:'No active terminal agents reported.', coverage:'Native chat tool calls and subagent trees are unavailable through Orca’s plugin API.'
   },
   ko: {
-    title: '세션 활동', session: '세션', chat: '대화', terminal: '터미널',
-    choose: '세션 선택', auto: '선택한 세션 따라가기', ready: '현재 보고된 활동이 없습니다.',
-    missing: '선택한 세션을 확인할 수 없습니다. 다른 세션을 선택하세요.',
-    noSession: '이 작업공간에 선택할 로컬 대화나 터미널이 없습니다.', unavailable: '세션 상태를 확인할 수 없습니다.', disabled: '이 세션을 보려면 설정 및 개인정보에서 채팅 활동 표시를 켜세요.',
-    loading: '세션 확인 중…'
+    heading:'터미널 활동', terminal:'터미널', open:'열린 터미널', working:'작업 중', waiting:'대기 중', blocked:'차단됨', observed:'도구 실행 중',
+    previous:'이전 터미널', next:'다음 터미널', disabled:'설정 및 개인정보에서 터미널 에이전트 상태 표시를 켜세요.', loading:'터미널 에이전트 확인 중…',
+    missing:'터미널 상태를 확인할 수 없습니다.', partial:'에이전트 상태를 확인할 수 없어 감지된 터미널 호출만 표시합니다.',
+    empty:'활동 중으로 보고된 터미널 에이전트가 없습니다.', coverage:'Orca 플러그인 API는 네이티브 채팅의 도구 호출과 서브에이전트 관계를 제공하지 않습니다.'
   }
 } as const
+const providers: Record<string,string> = { codex:'Codex', claude:'Claude', antigravity:'Antigravity', gemini:'Gemini', opencode:'OpenCode', copilot:'Copilot' }
 
-const providers: Record<string, string> = {
-  codex: 'Codex', claude: 'Claude', gemini: 'Gemini', antigravity: 'Antigravity', cursor: 'Cursor',
-  copilot: 'Copilot', droid: 'Droid', grok: 'Grok', omp: 'OMP', opencode: 'OpenCode', pi: 'Pi'
-}
-
-export function SessionWork({ locale, visible, nativeEnabled, providerEnabled }: {
-  locale: keyof typeof copy; visible: () => boolean; nativeEnabled: boolean; providerEnabled: boolean
-}) {
-  const t = copy[locale], result = read(report)
-  const choice = read(selected), loading = read(fetching) || !result
-  const options = (nativeEnabled ? result?.options ?? [] : []).map(option => ({
-    value: option.id, label: [option.provider && (providers[option.provider.toLowerCase()] || option.provider), t[option.kind], option.number].filter(Boolean).join(' ')
-  }))
-  const currentOption = options.find(option => option.value === result?.selected)
-  const pinned = options.some(option => option.value === choice)
-  const automatic = 'follow-active'
-  const choose = (value: string) => {
-    generation++
-    pending = null
-    set(selected, value === automatic ? null : value)
-    resetWorkTree()
-    set(fetching, true)
-    return refreshSessionWork(visible)
-  }
-  const ready = nativeEnabled && !loading && result?.status === 'ready'
-  const mainWorking = ready && result.mainWorking === true && currentOption?.value.startsWith('chat:') === true
-  const tree = sessionTree(ready ? result.tree ?? [] : [], locale, providerEnabled,
-    mainWorking ? result.turnTools : undefined, mainWorking && result.turnToolsLimited === true)
-  const hasWork = mainWorking || tree.children.length > 0
-  let status: string | null = t.ready
-  if (!nativeEnabled || result?.status === 'disabled') status = t.disabled
-  else if (loading) status = t.loading
-  else if (result?.status === 'unavailable') status = t.unavailable
-  else if (result?.status === 'select') {
-    status = !options.length ? t.noSession : choice && !pinned ? t.missing : null
-  }
+export function SessionWork({locale, enabled}: {locale: keyof typeof copy; enabled: boolean}) {
+  const t = copy[locale], snapshot = read(activity)
+  const rows = enabled && snapshot ? snapshot.rows : []
+  const last = Math.max(0, Math.ceil(rows.length / pageSize) - 1), current = Math.min(last,read(page))
+  const available = enabled && snapshot && (snapshot.status === 'ready' || snapshot.status === 'partial')
+  const status = !enabled || snapshot?.status === 'disabled' ? t.disabled : !snapshot ? t.loading :
+    snapshot.status === 'unavailable' ? t.missing : snapshot.status === 'partial' ? t.partial : !rows.length ? t.empty : null
   return <Stack gap="sm">
-    <Row justify="between" align="center" gap="sm" wrap>
-      <Heading level={2}>{t.title}</Heading>
-      {tree.activeAgents ? <Badge tone="accent">{locale === 'ko' ? `서브에이전트 ${tree.activeAgents}개 활동 중`
-        : `${tree.activeAgents} active subagent${tree.activeAgents === 1 ? '' : 's'}`}</Badge>
-        : ready && !hasWork && currentOption && options.length === 1 && !choice ? <Text size="xs" muted>{currentOption.label}</Text> : null}
-    </Row>
-    {options.length && (options.length > 1 || choice || !ready) ? <Select label={t.session} labelHidden
-      value={choice ? (pinned ? choice : '') : (currentOption ? automatic : '')} placeholder={t.choose}
-      options={[{ value: automatic, label: !choice && currentOption && !hasWork ? t.auto + ' · ' + currentOption.label : t.auto }, ...options]}
-      onChange={choose} /> : null}
-    {hasWork ? <SessionWorkTree model={tree} locale={locale} name={currentOption?.label ?? t.session} mainWorking={mainWorking}
-      turnActivity={mainWorking ? result.turnActivity : undefined}
-      terminal={result?.selected?.startsWith('terminal:') === true} /> : status ? <Text size="sm" muted>{status}</Text> : null}
+    <Row justify="between" align="center" wrap><Heading level={2}>{t.heading}</Heading>
+      {available ? <Text muted size="xs">{t.open} · {snapshot.openTerminals}</Text> : null}</Row>
+    {status ? <Text muted size="sm">{status}</Text> : null}
+    {rows.slice(current * pageSize,(current + 1) * pageSize).map(row => <Box key={String(row.terminal)} direction="column" gap="xs" border padding="sm" radius="md">
+      <Row justify="between" align="center" wrap><Text size="sm" weight="semibold">{[row.agent && (providers[row.agent.toLowerCase()] ?? row.agent),t.terminal + ' ' + row.terminal].filter(Boolean).join(' · ')}</Text>
+        <Badge tone={row.state === 'blocked' ? 'warning' : row.state === 'waiting' ? 'neutral' : 'accent'}>{t[row.state]}</Badge></Row>
+      {row.tools.length ? <Text size="xs">{row.tools.join(' · ')}</Text> : null}
+    </Box>)}
+    {last > 0 ? <Row align="center" justify="between"><Button size="sm" variant="ghost" disabled={!current} onPress={() => set(page,current-1)}>{t.previous}</Button>
+      <Text size="xs" muted>{current+1} / {last+1}</Text><Button size="sm" variant="ghost" disabled={current===last} onPress={() => set(page,current+1)}>{t.next}</Button></Row> : null}
+    {enabled ? <Text muted size="xs">{t.coverage}</Text> : null}
   </Stack>
 }

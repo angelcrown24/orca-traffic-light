@@ -179,9 +179,10 @@ export async function bootstrapStatus({ home = homedir() } = {}) {
   try {
     manifest = await readManifest(base)
   } catch {
-    return { setup: false, providers: [], conflict: true }
+    return { setup: false, managed: true, providers: [], conflict: true }
   }
   async function installedBlock(path) {
+    if (!manifest) return false
     try {
       const actual = await realpath(path)
       const item = manifest?.files.find(x => x.path === actual)
@@ -200,7 +201,11 @@ export async function bootstrapStatus({ home = homedir() } = {}) {
     // Antigravity and Gemini both discover this global instruction file.
     if (name === 'Gemini') providers.push({ name: 'Antigravity', state })
   }
-  const cli = await existing(join(base, 'auto-cli.mjs'))
+  let cli
+  if (manifest) {
+    try { cli = await existing(join(base, 'auto-cli.mjs')) }
+    catch { return { setup: false, managed: true, providers, conflict: true } }
+  }
   const setup = Boolean(
     manifest &&
       cli?.info.isFile() && !cli.info.isSymbolicLink() &&
@@ -208,21 +213,14 @@ export async function bootstrapStatus({ home = homedir() } = {}) {
       hash(cli.bytes) === manifest.cliHash &&
       providers.every((x) => x.state === 'ready')
   )
-  return { setup, providers }
-}
-// Restore the recommendation command for grants created by an older plugin release.
-export async function refreshOwnedBootstrap(home) {
-  const manifest = await readManifest(automationDirectory(home))
-  if (!manifest) return
-  const source = await readFile(new URL('./auto-cli.mjs', import.meta.url))
-  if (hash(source) !== manifest.cliHash && (await bootstrapStatus({ home })).setup) {
-    await installBootstrap({ home })
-  }
+  const needsUpdate = Boolean(setup &&
+    (hash(await readFile(new URL('./auto-cli.mjs', import.meta.url))) !== manifest.cliHash ||
+      !manifest.files.some(item => item.blockHash === hash(mainBlock(join(base, 'auto-cli.mjs'))))))
+  return { setup, providers, managed: Boolean(manifest), needsUpdate }
 }
 
-export async function installBootstrap({ home = homedir() } = {}) {
+async function instructionPlan(home) {
   const base = automationDirectory(home)
-  await privateDirectory(base)
   const manifest = await readManifest(base)
   const ssot = join(home, '.agents', 'AGENTS.md')
   const cli = join(base, 'auto-cli.mjs')
@@ -235,7 +233,9 @@ export async function installBootstrap({ home = homedir() } = {}) {
       hash(oldCli.bytes) !== manifest.cliHash)
   )
     throw issue('An unmanaged or modified Traffic Light launcher exists.')
-  const planned = new Map()
+  const planned = new Map(), files = []
+  const canonicalHome = await realpath(home)
+  const display = p => '~/' + relative(canonicalHome, p).split(sep).join('/')
   for (const [path, block] of [
     [ssot, mainBlock(cli)],
     [join(home, '.codex', 'AGENTS.md'), bridgeBlock(ssot)],
@@ -243,6 +243,7 @@ export async function installBootstrap({ home = homedir() } = {}) {
     [join(home, '.claude', 'CLAUDE.md'), bridgeBlock(ssot)]
   ]) {
     const item = await target(home, path)
+    files.push({ path: '~/' + relative(home, path).split(sep).join('/'), target: display(item.path) })
     if (planned.has(item.path)) continue // Existing provider symlinks already point to the SSOT.
     const content = item.original?.toString('utf8') ?? ''
     const currentBlock = detectBlock(content)
@@ -259,7 +260,24 @@ export async function installBootstrap({ home = homedir() } = {}) {
       : content + inserted
     planned.set(item.path, { ...item, next, blockHash: hash(block), inserted, previous })
   }
+  if (manifest?.files.some(file => !planned.has(file.path)))
+    throw issue('The provider instruction locations changed. Remove the previous managed blocks before reconnecting.')
   const source = await readFile(fileURLToPath(new URL('./auto-cli.mjs', import.meta.url)))
+  const revision = hash(JSON.stringify([files, [...planned.values()].map(x => [x.path, x.original && hash(x.original), x.blockHash]),
+    hash(source), manifest, oldCli && hash(oldCli.bytes)]))
+  return { files, revision, planned, base, cli, oldCli, source }
+}
+
+export async function previewBootstrap({ home = homedir() } = {}) {
+  const {files, revision} = await instructionPlan(home)
+  return {files, revision}
+}
+
+export async function installBootstrap({ home = homedir(), revision: confirmed } = {}) {
+  const {revision, planned, base, cli, oldCli, source} = await instructionPlan(home)
+  if (!confirmed) throw issue('Confirm the reviewed instruction files before installation.')
+  if (revision !== confirmed) throw issue('The instruction files changed. Review their locations again.')
+  await privateDirectory(base)
   const backupDir = join(base, 'backups', randomUUID())
   await privateDirectory(backupDir)
   const written = []
@@ -313,7 +331,9 @@ export async function removeBootstrap({ home = homedir() } = {}) {
     const current = await target(home, item.path)
     const text = current.original?.toString('utf8') ?? ''
     const block = detectBlock(text)
-    if (!block || hash(block.text) !== item.blockHash)
+    if (current.path !== item.path) throw issue('An instruction target changed. The replacement was preserved.')
+    if (!block) continue // Already removed by the user. Leave the current file in place.
+    if (hash(block.text) !== item.blockHash)
       throw issue('A managed block changed. Disable refused to preserve the user edits.')
     // Remove exactly the bytes we inserted when possible; preserve all unrelated additions.
     const next = text.includes(item.inserted)

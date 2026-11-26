@@ -10,15 +10,18 @@ export type CatalogItem = {
   providerOnly?: ProviderOnlyReason
   reason?: string
   skillRequirements?: string
-  sharing?: { state: 'provider' | 'shared' | 'update' | 'conflict'; canSync: boolean; detail?: string }
+  sharing?: { state: 'provider' | 'shared' | 'update' | 'conflict'; canSync: boolean; unshareKey?: string; detail?: string }
 }
 export type CompareField = 'transport' | 'command' | 'arguments' | 'environment' | 'workingDirectory' | 'endpoint' | 'authentication' | 'timeouts' | 'files' | 'contents' | 'permissions'
 export type SourceComparison = { id: string; variant: number | null; transport?: 'stdio' | 'http'; commandHint?: string; argumentCount?: number; envCount?: number; headerCount?: number; fileCount?: number }
 export type ToolboxComparison = { sources: SourceComparison[]; differences: CompareField[] }
 export type ToolboxCatalog = { items: CatalogItem[]; warnings: string[] }
+type UnshareScope = { name: string; source: string; sourceAvailable: boolean; links: string[]; snapshots: string[]; preserved: string[]; legacy: boolean }
+export type UnshareResult = (UnshareScope & ({ status: 'ready'; revision: string } | { status: 'blocked'; blockers: string[] })) | { status: 'removed'; name: string }
 export type ToolboxBundle = { id: string; names: string[]; instructions: string; createdAt: number }
 export type ToolboxEvent = { id: string; bundleId: string; name: string; kind: 'skill' | 'mcp'; state: 'running' | 'succeeded' | 'failed'; capabilityName?: string; operation?: 'skill' | 'tools' | 'call' | 'reconnect'; recommendationId?: string; startedAt: number; finishedAt?: number }
-export type AutomationState = { enabled: boolean; setup: boolean; providers: { name: string; state: string; detail?: string }[]; sessions: number; appliedIds?: string[]; error?: string }
+export type AgentInstructionPreview = { files: { path: string; target: string }[]; revision: string }
+export type AutomationState = { enabled: boolean; setup: boolean; managed?: boolean; needsUpdate?: boolean; providers: { name: string; state: string; detail?: string }[]; sessions: number; appliedIds?: string[]; error?: string }
 export type SyncResult = { id: string; newId?: string; name: string; status: 'synced' | 'unchanged' | 'conflict' | 'failed'; message: string }
 export type ToolboxState = { workspaceId: string | null; selected: string[]; bundle: ToolboxBundle | null; events: ToolboxEvent[]; automation?: AutomationState }
 

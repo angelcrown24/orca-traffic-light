@@ -1,4 +1,5 @@
-import type { ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis, SkillInspection, SkillChangeInput, SkillChangeApplyInput, SkillChangePreview, SkillChangeReceipt, SkillBatchItem, SkillBatchPreview, SkillBatchResult, SkillBatchStatus, SkillBatchUndoResult, SkillBatchProgress } from '../src/toolbox-types'
+import type { UnshareResult } from '../src/toolbox-types'
+import type { AgentInstructionPreview, ToolboxCatalog, ToolboxState, SyncResult, ToolboxComparison, ToolboxActivity, SkillReviewReport, RecommendationPreviewInput, RecommendationPreview, SkillAnalysisInput, SkillAnalysis, SkillInspection, SkillChangeInput, SkillChangeApplyInput, SkillChangePreview, SkillChangeReceipt, SkillBatchItem, SkillBatchPreview, SkillBatchResult, SkillBatchStatus, SkillBatchUndoResult, SkillBatchProgress } from '../src/toolbox-types'
 export function createToolboxManager(options: {
   getContext: () => Promise<{ workspaceId?: string } | null>
   getWorkspaces: () => Promise<{ workspaces: { id: string; path: string; hostId: string | null }[] }>
@@ -19,7 +20,9 @@ export function createToolboxManager(options: {
   copy(input: { workspaceId: string; bundleId: string }): Promise<{ copied: boolean }>
   copyAdaptation(input: { workspaceId: string; id: string; language: 'en' | 'ko' }): Promise<{ copied: boolean; prompt: string }>
   initialize(): Promise<void>
-  setAutomation(input: { workspaceId: string; enabled: boolean }): Promise<ToolboxState>
+  previewAgentInstructions(input: {workspaceId: string}): Promise<AgentInstructionPreview>
+  setAutomation(input: { workspaceId: string; enabled: boolean; instructionRevision?: string }): Promise<ToolboxState>
+  removeAgentInstructions(input: {workspaceId: string}): Promise<ToolboxState>
   skillReview(input: { workspaceId: string }): Promise<SkillReviewReport>
   previewSkillChange(input: SkillChangeInput): Promise<SkillChangePreview>
   applySkillChange(input: SkillChangeApplyInput): Promise<SkillChangeReceipt>
@@ -34,6 +37,7 @@ export function createToolboxManager(options: {
   reviewSkills(input: SkillAnalysisInput): Promise<SkillAnalysis>
   copySkillReview(input: SkillAnalysisInput): Promise<{ copied: boolean; prompt: string }>
   compare(input: { id: string }): Promise<ToolboxComparison>
+  unshare(input: { workspaceId: string; key: string; revision?: string }): Promise<UnshareResult>
   sync(input: { workspaceId: string; ids: string[]; preserveProviderCopies?: boolean; reviewedSourceStamp?: string }): Promise<{ results: SyncResult[]; catalog: ToolboxCatalog }>
   dispose(): Promise<void>
 }
